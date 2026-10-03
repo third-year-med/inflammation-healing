@@ -1660,11 +1660,14 @@ body.neo-locked>*:not(#neo-boot){display:none!important}
 <script id="neo-config">window.NEO_CONFIG = {"backendUrl": "https://script.google.com/macros/s/AKfycbzx0Yg0YAaJ8mAvcHoondUmlS-DtZTjrvnLvcAE-tNSF3McBcV-znF0-S8PV54_XrM/exec", "studentAuth": true, "moduleKey": "inflhealing", "storagePrefix": "ih_", "title": "Inflammation & Healing", "subtitle": "Interactive Pathology Teaching Platform", "author": "Dr. Wesam Alzwawy", "platformHome": "https://third-year-med.github.io/Interactive-pathology-platform/"};</script>
 <script id="platform-nav">
 /* ==========================================================================
-   platform-nav — "← Back to Platform Home" (shared by every platform module).
+   platform-nav — role-aware return link (shared by every platform module).
    Reads NEO_CONFIG.platformHome (https only). Adds the link to the top of the
-   module header (every view, students and teachers) and to the module's
-   sign-in screen. Also sets window.PLATFORM_HOME, which makes teacher access
-   go through the single Teacher Sign-In on the Platform Home.
+   module header and to the module's sign-in screen. The destination follows
+   the role the class server confirmed for this session (NEO_BOOT.role):
+     student / not signed in → "← Back to Platform Home"     → the front page
+     teacher                 → "← Back to Teacher Dashboard" → <home>#/teacher
+   Also sets window.PLATFORM_HOME, which makes teacher access go through the
+   single Teacher Sign-In on the Platform Home.
    ========================================================================== */
 (function () {
   'use strict';
@@ -1676,11 +1679,24 @@ body.neo-locked>*:not(#neo-boot){display:none!important}
     '.pf-home:hover{background:#ffd166;color:#0b2a4a;border-color:#ffd166}.pf-home:focus-visible{outline:3px solid #ffd166;outline-offset:2px}' +
     '.pf-home.pf-boot{color:#0b2a4a;background:#eef4f8;border-color:#cbd5e1;margin:0 0 14px}.pf-home.pf-boot:hover{background:#ffd166}' +
     '@media print{.pf-bar,.pf-home{display:none!important}}';
+  /** Where "back" goes for the signed-in role (set by the sign-in gate only after the server confirmed the session). */
+  function dest() {
+    var teacher = !!(window.NEO_BOOT && window.NEO_BOOT.role === 'teacher');
+    return teacher ? { href: HOME + '#/teacher', text: '\u2190 Back to Teacher Dashboard', label: 'Back to the Teacher Dashboard', role: 'teacher' }
+      : { href: HOME, text: '\u2190 Back to Platform Home', label: 'Back to Platform Home — Interactive Pathology Teaching Platform', role: 'student' };
+  }
+  function apply(a) {
+    var d = dest();
+    if (a.getAttribute('href') !== d.href) a.setAttribute('href', d.href);
+    if (a.textContent !== d.text) a.textContent = d.text;
+    a.setAttribute('aria-label', d.label); a.setAttribute('data-role', d.role);
+  }
+  function applyAll() { Array.prototype.forEach.call(document.querySelectorAll('a.pf-home'), apply); }
   function link(extra) {
     var a = document.createElement('a');
-    a.className = 'pf-home' + (extra ? ' ' + extra : ''); a.href = HOME;
-    a.setAttribute('aria-label', 'Back to Platform Home — Interactive Pathology Teaching Platform');
-    a.textContent = '← Back to Platform Home';
+    a.className = 'pf-home' + (extra ? ' ' + extra : '');
+    a.addEventListener('click', function () { apply(a); });   // always the current role, even if it changed meanwhile
+    apply(a);
     return a;
   }
   function addHeader() {
@@ -1696,7 +1712,7 @@ body.neo-locked>*:not(#neo-boot){display:none!important}
   function init() {
     if (!document.getElementById('pf-css')) { var st = document.createElement('style'); st.id = 'pf-css'; st.textContent = CSS; document.head.appendChild(st); }
     addHeader(); addBoot();
-    var mo = new MutationObserver(function () { if (!document.body.classList.contains('neo-locked')) { mo.disconnect(); return; } addBoot(); });
+    var mo = new MutationObserver(function () { if (!document.body.classList.contains('neo-locked')) { mo.disconnect(); applyAll(); return; } addBoot(); });
     mo.observe(document.body, { childList: true, subtree: true });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
