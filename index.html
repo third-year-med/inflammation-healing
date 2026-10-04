@@ -1665,6 +1665,7 @@ body.neo-locked>*:not(#neo-boot){display:none!important}
    module header and to the module's sign-in screen. The destination follows
    the role the class server confirmed for this session (NEO_BOOT.role):
      student / not signed in → "← Back to Platform Home"     → the front page
+                               (of the same group when opened with ?g=…)
      teacher                 → "← Back to Teacher Dashboard" → <home>#/teacher
    Also sets window.PLATFORM_HOME, which makes teacher access go through the
    single Teacher Sign-In on the Platform Home.
@@ -1674,6 +1675,7 @@ body.neo-locked>*:not(#neo-boot){display:none!important}
   var HOME = String((window.NEO_CONFIG || {}).platformHome || '').trim();
   if (!/^https:\/\/[^\s"'<>]+$/.test(HOME)) return;
   window.PLATFORM_HOME = HOME;
+  var GROUP = (function () { try { var m = /[?&]g=([A-Za-z0-9_-]{1,24})/.exec(location.search); return m ? m[1] : ''; } catch (e) { return ''; } })();   // the module's own ?g= rule
   var CSS = '.pf-bar{display:flex;align-items:center;padding:.32rem 1.2rem;background:rgba(0,0,0,.2);border-bottom:1px solid rgba(255,255,255,.12)}' +
     '.pf-home{display:inline-flex;align-items:center;gap:.4rem;font:700 .84rem/1.2 inherit;font-family:inherit;text-decoration:none;color:#fff;padding:.28rem .8rem;border-radius:999px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.28);transition:background .15s,color .15s}' +
     '.pf-home:hover{background:#ffd166;color:#0b2a4a;border-color:#ffd166}.pf-home:focus-visible{outline:3px solid #ffd166;outline-offset:2px}' +
@@ -1683,7 +1685,7 @@ body.neo-locked>*:not(#neo-boot){display:none!important}
   function dest() {
     var teacher = !!(window.NEO_BOOT && window.NEO_BOOT.role === 'teacher');
     return teacher ? { href: HOME + '#/teacher', text: '\u2190 Back to Teacher Dashboard', label: 'Back to the Teacher Dashboard', role: 'teacher' }
-      : { href: HOME, text: '\u2190 Back to Platform Home', label: 'Back to Platform Home — Interactive Pathology Teaching Platform', role: 'student' };
+      : { href: HOME + (GROUP ? '?g=' + encodeURIComponent(GROUP) : ''), text: '\u2190 Back to Platform Home', label: 'Back to Platform Home — Interactive Pathology Teaching Platform', role: 'student' };
   }
   function apply(a) {
     var d = dest();
