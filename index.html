@@ -864,6 +864,10 @@ body.pres-fs-on{overflow:hidden}
 .prac-fig-img{background:#0b1220;height:240px;display:flex;align-items:center;justify-content:center}
 .prac-mk{position:relative;display:inline-block;max-width:100%;max-height:100%;line-height:0}.prac-mk>img{display:block;max-width:100%;max-height:240px}.prac-img-thumb .prac-mk>img{max-height:150px}
 .prac-img-missing{padding:2rem 1rem;text-align:center;color:var(--muted);font-size:.85rem}
+.prac-img-missing b{display:block;color:var(--text,#1f2937);margin-bottom:.25rem}.prac-img-missing .btn{color:inherit}
+.prac-fig-img .prac-img-missing,.prac-img-thumb .prac-img-missing{background:#f8fafc;color:#475569;width:100%;padding:1rem .75rem}
+.prac-img-thumb .prac-img-missing{height:100%;padding:.45rem .5rem;font-size:.72rem;line-height:1.3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.15rem;overflow:auto}
+.prac-link-prev img{display:block;max-width:100%;max-height:220px;object-fit:contain;border-radius:8px;border:1px solid var(--line-2,#e5e7eb);background:#f8fafc}
 .prac-marks-wrap{position:absolute;inset:0;pointer-events:none}
 .prac-marks{position:absolute;inset:0;width:100%;height:100%}
 .prac-mark-labels span{position:absolute;transform:translate(35%,-160%);background:#111827;color:#fff;border:2px solid #facc15;border-radius:999px;font-size:.7rem;font-weight:800;min-width:1.35em;height:1.35em;display:grid;place-items:center}
@@ -4407,11 +4411,15 @@ function pickImageDialog(title) {
               msg.className = 'msg info'; msg.textContent = 'Uploading to Google Drive…';
               const r = await Backend.uploadImage(dataUrl, (file.files[0] && file.files[0].name) || 'image.jpg');
               if (r && r.ok && r.url) finalUrl = r.url;
-              else { finalUrl = dataUrl; toast(describeUploadError(r && r.error), 'warn', 9000); }
+              else { // never store the picture itself (base64) in the content: it makes items too large to save
+                msg.className = 'msg bad'; msg.textContent = 'Save failed — the picture could not be uploaded, so it was not added. ' + describeUploadError(r && r.error).replace(/^Upload failed — stored locally instead: /, '') + ' You can paste an image address instead.';
+                return false;
+              }
             } else finalUrl = dataUrl;
           } else if (url.value.trim()) {
-            if (!isSafeUrl(url.value)) { msg.className = 'msg bad'; msg.textContent = 'Please enter a valid http(s) image URL.'; return false; }
-            finalUrl = url.value.trim();
+            const u = typeof pracNormImageUrl === 'function' ? pracNormImageUrl(url.value) : url.value.trim();
+            if (!isSafeUrl(u) || /^data:/i.test(u) || /\s/.test(u)) { msg.className = 'msg bad'; msg.textContent = 'Invalid URL — please enter a valid http(s) image address.'; return false; }
+            finalUrl = u;
           }
           if (!finalUrl) { msg.className = 'msg bad'; msg.textContent = 'Choose a file or paste an image URL.'; return false; }
           done = true; resolve({ url: finalUrl, caption: cap.value.trim(), credit: cred.value.trim() }); close(true); return true;
@@ -7083,13 +7091,19 @@ const PE_RES_TYPES = {
 function PE_resUrlOk(u) { return /^https?:\/\/[^\s]+$/i.test(String(u || '').trim()); }
 /** The resources a student may see: active, with a valid web link. Strips the teacher-only 'active' flag. */
 function PE_activeResources(list) {
-  return (Array.isArray(list) ? list : []).filter(r => r && r.active !== false && PE_resUrlOk(r.url))
+  return (Array.isArray(list) ? list : []).map(PE_normResource).filter(r => r && r.active !== false && PE_resUrlOk(r.url))
     .map(r => ({ id: String(r.id || ''), type: PE_RES_TYPES[r.type] ? r.type : 'other', title: PE_str(r.title, 160), url: String(r.url).trim(), note: PE_str(r.note, 300) }));
+}
+/** Older resource records may name the link "link" / "href" and the title "name" / "label". */
+function PE_normResource(r) {
+  if (!r || typeof r !== 'object') return r;
+  if (r.url || !(r.link || r.href)) return r.title || !(r.name || r.label) ? r : Object.assign({}, r, { title: r.name || r.label });
+  return Object.assign({}, r, { url: r.link || r.href, title: r.title || r.name || r.label || '' });
 }
 
 /* ---------------------------------------------------------------- real images: student-safe copy */
 /** One image as students receive it (the teacher-only 'active' switch is not included). */
-function PE_snapImage(im) { return { id: im.id, slot: im.slot, kind: im.kind || im.slot, url: im.url, fileId: im.fileId || '', caption: im.caption || '', annotation: im.annotation || '', stain: im.stain || '', magnification: im.magnification || '', w: im.w || 0, h: im.h || 0, marks: im.marks || [] }; }
+function PE_snapImage(im) { return { id: im.id, slot: im.slot, kind: im.kind || im.slot, url: im.url || im.src || im.imageUrl || im.image || '', fileId: im.fileId || '', caption: im.caption || '', annotation: im.annotation || '', stain: im.stain || '', magnification: im.magnification || '', w: im.w || 0, h: im.h || 0, marks: im.marks || [] }; }
 /** The Active switch is managed live (like resources), so it is left out of the "changes not published" hash. */
 function PE_imagesForHash(list) { return (list || []).map(im => { const o = Object.assign({}, im); delete o.active; return o; }); }
 
@@ -7751,7 +7765,11 @@ const PracImages = {
     const b = await PracIDB.get(url.slice(5)); if (!b) return '';
     const o = URL.createObjectURL(b); this.cache.set(url, o); return o;
   },
-  setSrc(img, url) { if (!this.isLocalRef(url)) { img.src = url; return; } this.src(url).then(s => { if (s) img.src = s; else img.dispatchEvent(new Event('error')); }); },
+  setSrc(img, url) {
+    if (!url) { setTimeout(() => img.dispatchEvent(new Event('error')), 0); return; }
+    if (!this.isLocalRef(url)) { img.referrerPolicy = 'no-referrer'; img.src = url; return; }
+    this.src(url).then(s => { if (s) img.src = s; else img.dispatchEvent(new Event('error')); });
+  },
   /** JPEG bytes for the PDF. Order: local store → data URL → platform Drive file via backend → CORS fetch. */
   async bytes(im) {
     const url = im.url || '';
@@ -7766,6 +7784,47 @@ const PracImages = {
     return blobToJpeg(await res.blob());
   }
 };
+/* ---------------- external images & links (2026-10 reliability fix) ----------------
+   Pictures added by link are shown from their own website (nothing is copied). A pasted Google Drive share link is
+   turned into its displayable picture address; "www.…" gets https://. When a website refuses to let its picture be
+   embedded, the address is kept and shown as an "Open image/resource" link instead of being lost. */
+function pracNormUrl(u) {
+  let s = String(u == null ? '' : u).trim();
+  if (!s || /^(data:|pimg:|fig:)/i.test(s)) return s;
+  if (/^www\./i.test(s)) s = 'https://' + s;
+  return s;
+}
+function pracNormImageUrl(u) {
+  const s = pracNormUrl(u);
+  const m = /^https?:\/\/drive\.google\.com\/(?:file\/d\/([A-Za-z0-9_-]{10,})|(?:open|uc)\?(?:[^#]*&)?id=([A-Za-z0-9_-]{10,}))/i.exec(s);
+  return m ? 'https://drive.google.com/thumbnail?id=' + (m[1] || m[2]) + '&sz=w2000' : s;
+}
+function pracHttpsOk(u) { if (/\s/.test(String(u || ''))) return false; try { const x = new URL(u); return x.protocol === 'https:' && !!x.hostname && x.hostname.indexOf('.') > 0; } catch (e) { return false; } }
+/** 'image' = the address is a picture · 'page' = a web page (better as a resource link) · '' = cannot tell from the address. */
+function pracUrlKind(u) {
+  const s = String(u || '');
+  if (/^data:image\//i.test(s) || /^(pimg|fig):/i.test(s)) return 'image';
+  let x; try { x = new URL(s); } catch (e) { return ''; }
+  const path = x.pathname.toLowerCase(), host = x.hostname.toLowerCase();
+  if (/\.(jpe?g|png|gif|webp|svg|bmp|tiff?|avif)$/.test(path) || (host === 'drive.google.com' && path.indexOf('/thumbnail') === 0) || /googleusercontent\.com$/.test(host)) return 'image';
+  if (/\.(html?|php|aspx?|jsp|cfm)$/.test(path) || path === '/' || /(^|\.)(youtube\.com|youtu\.be|vimeo\.com)$/.test(host)) return 'page';
+  return '';
+}
+function pracHost(u) { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return ''; } }
+/** The picture address of an image record (older records may use src / imageUrl / image). */
+function pracImgUrl(im) { return String((im && (im.url || im.src || im.imageUrl || im.image)) || ''); }
+/** Replaces a picture that cannot be shown with a clear message; the address is kept and can still be opened. */
+function pracImgFallback(node, url, teacher) {
+  if (!node || !node.parentNode) return null;
+  const local = PracImages.isLocalRef(url), web = /^https?:\/\//i.test(url);
+  const box = el('div', { class: 'prac-img-missing' }, el('b', null, '⚠ Image failed to load'),
+    el('div', { class: 'small' }, local ? 'This picture is stored only on the device where it was added.' : teacher
+      ? 'The address is saved, but this website does not allow its picture to be shown here (or it is a web page). Students get this link instead.'
+      : 'The website does not allow this picture to be shown here.'),
+    web ? el('a', { class: 'btn btn-xs mt1', href: url, target: '_blank', rel: 'noopener noreferrer', onclick: (e) => e.stopPropagation() }, 'Open image/resource ↗') : null);
+  node.replaceWith(box); return box;
+}
+
 /** Schematic SVG → JPEG (2.2× for crisp print) — or the teacher's replacement image. */
 async function diagramJpeg(dg) {
   if (dg.replaceUrl) return PracImages.bytes({ url: dg.replaceUrl, fileId: dg.replaceFileId });
@@ -8086,7 +8145,18 @@ Views.practical = {
     if (Auth.isTeacher() && !PracData.loaded) PracData.load().then(() => { if (Router.current === 'practical') this.render(); });
     this.render();
   },
-  refresh() { const p0 = this.params[0]; if (p0 === 'bank' || p0 === 'item' || p0 === 'test') return PracticalBank.refresh(); if (PracEditor.dirty && p0 === 'edit') return; this.render(); },
+  refresh() {
+    const p0 = this.params[0]; if (p0 === 'bank' || p0 === 'item' || p0 === 'test') return PracticalBank.refresh();
+    // The editor works on the teacher's private draft, which a content sync never carries. Repainting it here threw
+    // away what was being typed (resource links and the image switch save on their own, without the "dirty" flag).
+    // Only the published status can change, so just that is updated.
+    if (p0 === 'edit' && PracEditor.d && PracEditor.d.id === this.params[1] && PracEditor.page && PracEditor.page.isConnected) {
+      if (PracEditor.statusBox) clear(PracEditor.statusBox).appendChild(pracStatusBadge(PracEditor.d));
+      PracEditor.paintActions(); return;
+    }
+    if (PracEditor.dirty && p0 === 'edit') return;
+    this.render();
+  },
   render() {
     const [p0, p1] = this.params;
     if (p0 === 'p') return PracStudent.detail(p1);
@@ -8179,8 +8249,9 @@ function pracResourcesNode(list) {
     const T = PE_RES_TYPES[type];
     box.appendChild(el('div', { class: 'prac-res-group' }, el('h3', null, T.group),
       group.map(r => el('div', { class: 'prac-res-item' },
-        el('div', null, r.title ? el('div', { class: 't' }, r.title) : null, r.note ? el('div', { class: 'n' }, r.note) : null),
-        el('button', { class: 'btn btn-sm btn-primary', onclick: () => pracOpenResource(r) }, T.button)))));
+        el('div', null, el('div', { class: 't' }, r.title || pracHost(r.url) || 'Link'), r.note ? el('div', { class: 'n' }, r.note) : null, pracHost(r.url) ? el('div', { class: 'n' }, pracHost(r.url)) : null),
+        r.type === 'video' && videoEmbedUrl(r.url) ? el('button', { class: 'btn btn-sm btn-primary', onclick: () => pracOpenResource(r) }, T.button)
+          : el('a', { class: 'btn btn-sm btn-primary', href: r.url, target: '_blank', rel: 'noopener noreferrer' }, T.button + ' ↗')))));
   });
   return box;
 }
@@ -8189,10 +8260,10 @@ function pracOpenResource(r) {
   if (emb) {
     openModal({ title: '🎥 ' + (r.title || 'Video'), wide: true, body: el('div', null,
       el('div', { class: 'media-video-wrap', style: 'border-radius:12px;overflow:hidden' }, el('iframe', { src: emb, title: r.title || 'Video', allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture', allowfullscreen: true })),
-      el('div', { class: 'small mt1' }, el('a', { href: r.url, target: '_blank', rel: 'noopener' }, 'Open on YouTube ↗'))) });
+      el('div', { class: 'small mt1' }, el('a', { href: r.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open on YouTube ↗'))) });
     return;
   }
-  if (PE_resUrlOk(r.url)) window.open(r.url, '_blank', 'noopener');
+  if (PE_resUrlOk(r.url)) window.open(r.url, '_blank', 'noopener,noreferrer');
 }
 /** Student gallery: Gross / Microscopic / Other groups — only groups that have images, no headings when only one. */
 function pracImageGallery(images) {
@@ -8204,12 +8275,12 @@ function pracImageGallery(images) {
 function pracFigureGrid(images) {
   const grid = el('div', { class: 'prac-figs' });
   images.forEach((im, i) => {
-    const img = el('img', { alt: im.caption || 'Practical image', loading: 'lazy' }); PracImages.setSrc(img, im.url);
+    const img = el('img', { alt: im.caption || 'Practical image', loading: 'lazy' }); PracImages.setSrc(img, pracImgUrl(im));
     const wrap = el('div', { class: 'prac-fig-img' }, el('span', { class: 'prac-mk' }, img, pracMarksOverlay(im))); // overlay box = rendered image box, so markers sit exactly on target
     const cap = PE_figCaption(im);
     const fig = el('figure', { class: 'prac-fig', title: 'Click to enlarge' }, wrap, el('figcaption', null, el('span', { class: 'badge plain' }, PE_IMAGE_KINDS[im.kind] || PE_IMAGE_SLOTS[im.slot] || 'Image'), ' ', cap));
-    fig.addEventListener('click', async () => { const src = await PracImages.src(im.url); openLightbox(images.map(x => ({ src: x === im ? src : (PracImages.isLocalRef(x.url) ? '' : x.url), caption: PE_figCaption(x) })).filter(x => x.src), Math.max(0, images.filter(x => !PracImages.isLocalRef(x.url) || x === im).indexOf(im))); });
-    img.addEventListener('error', () => { wrap.replaceWith(el('div', { class: 'prac-img-missing' }, '⚠ Image unavailable offline')); });
+    fig.addEventListener('click', async () => { if (!img.isConnected) return; const src = await PracImages.src(pracImgUrl(im)); openLightbox(images.map(x => ({ src: x === im ? src : (PracImages.isLocalRef(pracImgUrl(x)) ? '' : pracImgUrl(x)), caption: PE_figCaption(x) })).filter(x => x.src), Math.max(0, images.filter(x => !PracImages.isLocalRef(x.url) || x === im).indexOf(im))); });
+    img.addEventListener('error', () => { pracImgFallback(wrap, pracImgUrl(im), Auth.isTeacher()); fig.title = ''; });
     grid.appendChild(fig);
   });
   return grid;
@@ -8299,7 +8370,7 @@ const PracTeacher = {
         el('td', null, pracStatusBadge(d)), el('td', null, pracQcBadges(d)),
         el('td', { class: 'nowrap small' }, (d.images || []).length + ' 📷 · ' + d.questions.length + ' ❓'),
         el('td', { class: 'nowrap' }, el('button', { class: 'btn btn-xs', onclick: () => Router.go('practical', ['edit', d.id]) }, '✏ Edit'), ' ',
-          d.status === 'published' ? el('button', { class: 'btn btn-xs', onclick: () => Router.go('practical', ['p', d.id]) }, '👁 View') : null)));
+          PracData.pub(d.id) ? el('button', { class: 'btn btn-xs', onclick: () => Router.go('practical', ['p', d.id]) }, '👁 View') : null)));
     });
     card.appendChild(el('div', { class: 'table-scroll' }, el('table', { class: 'data-table' }, el('thead', null, el('tr', null, ['No.', 'Practical', 'Status', 'Quality check', 'Content', ''].map(h => el('th', null, h)))), tb)));
     return card;
@@ -8475,7 +8546,13 @@ const PracEditor = {
     if (!Auth.isTeacher()) return pracTeacherGate(page, 'Editing practicals');
     const src = PracData.get(id);
     if (!src) { page.appendChild(el('div', { class: 'card empty mt2' }, PracData.loaded ? 'This practical no longer exists.' : 'Loading…', el('div', { class: 'mt1' }, el('button', { class: 'btn', onclick: () => Router.go('practical') }, '◀ All practicals')))); if (!PracData.loaded) PracData.load().then(() => this.open(id)); return; }
-    if (!this.d || this.d.id !== id || !this.dirty) this.d = deepClone(src);
+    if (!this.d || this.d.id !== id || !this.dirty) {
+      this.d = deepClone(src);
+      // older records: image address under src / imageUrl / image, links under link / href — shown and kept as url
+      this.d.images = (Array.isArray(this.d.images) ? this.d.images : []).map(im => im && !im.url && pracImgUrl(im) ? Object.assign(im, { url: pracImgUrl(im) }) : im).filter(Boolean);
+      this.d.resources = (Array.isArray(this.d.resources) ? this.d.resources : []).map(PE_normResource).filter(Boolean);
+      if (!Array.isArray(this.d.placeholders)) this.d.placeholders = [];
+    }
     this.page = page; this.paint();
   },
   changed(repaintQc) { this.dirty = true; this.setSaveState('Unsaved changes…'); this.autosave(); if (repaintQc !== false) this.paintQc(); },
@@ -8541,9 +8618,11 @@ const PracEditor = {
     box.appendChild(el('button', { class: 'btn btn-sm', onclick: async () => { await this.save(); pracPreviewDraft(d); } }, '👁 Preview'));
     box.appendChild(el('button', { class: 'btn btn-sm', onclick: async () => { await this.save(); pracDownload(null, 'single', { drafts: [PE_publishSnapshot(d, { version: (d.publishedVersion || 0) + 1 })].map(x => Object.assign(x, { settings: Object.assign({}, x.settings, { allowPdf: true }) })), preview: true }); } }, '📄 Draft PDF'));
     if (d.questions.length || d.viva.length) box.appendChild(el('button', { class: 'btn btn-sm', onclick: async () => { await this.save(); const snap = PE_publishSnapshot(Object.assign({}, d, { settings: Object.assign({}, d.settings, { allowAnswerKey: true }) }), { version: d.publishedVersion || 1 }); pracDownload(null, 'answerKey', { drafts: [snap] }); } }, '🔑 Answer key'));
-    if (d.status === 'draft') box.appendChild(el('button', { class: 'btn btn-sm btn-primary', disabled: !!q.errors, title: q.errors ? 'Fix the quality-check errors first' : '', onclick: async () => { await this.save(); await PracData.approve(this.d); toast('Approved — you can now publish it.', 'ok'); this.paint(); } }, '✓ Approve'));
-    if (d.status === 'approved' || (d.status === 'published' && PracData.hasUnpublishedChanges(d))) box.appendChild(el('button', { class: 'btn btn-sm btn-primary', disabled: !!q.errors || d.status !== 'approved', title: d.status !== 'approved' ? 'Approve the changes first' : '', onclick: () => pracPublishDialog(this.d) }, d.status === 'published' ? '⬆ Publish update' : '🚀 Publish'));
-    if (d.status === 'published') box.appendChild(el('button', { class: 'btn btn-sm', onclick: async () => { if (await confirmDialog('Unpublish? Students will no longer see this practical.', { okLabel: 'Unpublish' })) { await PracData.unpublish(this.d); toast('Unpublished.', 'ok'); this.paint(); } } }, 'Unpublish'));
+    // a published practical that was edited needs its changes approved too (before, only "Publish update" was shown — disabled — so edits could not reach students)
+    const editedPub = d.status === 'published' && PracData.hasUnpublishedChanges(d);
+    if (d.status === 'draft' || editedPub) box.appendChild(el('button', { class: 'btn btn-sm btn-primary', disabled: !!q.errors, title: q.errors ? 'Fix the quality-check errors first' : '', onclick: async () => { await this.save(); await PracData.approve(this.d); toast(editedPub ? 'Changes approved — press “Publish update” to give them to students.' : 'Approved — you can now publish it.', 'ok'); this.paint(); } }, editedPub ? '✓ Approve changes' : '✓ Approve'));
+    if (d.status === 'approved' || (d.status === 'published' && PracData.hasUnpublishedChanges(d))) box.appendChild(el('button', { class: 'btn btn-sm btn-primary', disabled: !!q.errors || d.status !== 'approved', title: d.status !== 'approved' ? 'Approve the changes first' : '', onclick: () => pracPublishDialog(this.d) }, PracData.pub(d.id) ? '⬆ Publish update' : '🚀 Publish'));
+    if (PracData.pub(d.id)) box.appendChild(el('button', { class: 'btn btn-sm', onclick: async () => { if (await confirmDialog('Unpublish? Students will no longer see this practical.', { okLabel: 'Unpublish' })) { await PracData.unpublish(this.d); toast('Unpublished.', 'ok'); this.paint(); } } }, 'Unpublish'));
     box.appendChild(el('button', { class: 'btn btn-sm btn-danger', onclick: async () => { if (await confirmDialog('Delete “' + d.title + '” permanently' + (d.status === 'published' ? ' (it is also removed from students)' : '') + '?', { danger: true, okLabel: 'Delete' })) { this.dirty = false; await PracData.remove(d.id); toast('Deleted.', 'ok'); Router.go('practical'); } } }, '🗑'));
   },
   paintQc() {
@@ -8574,8 +8653,9 @@ const PracEditor = {
       const ttl = el('input', { type: 'text', placeholder: 'Title (e.g. Acute appendicitis — gross)', value: r.title || '', class: 'ttl' });
       ttl.addEventListener('input', () => { r.title = ttl.value; this.saveResources(); });
       const url = el('input', { type: 'url', placeholder: 'https://…', value: r.url || '', class: 'url' });
-      const bad = el('div', { class: 'small', style: 'color:var(--bad);grid-column:1/-1' + (r.url && !PE_resUrlOk(r.url) ? '' : ';display:none') }, '⚠ Enter a full web link starting with https:// — a resource without a valid link is not shown to students.');
+      const bad = el('div', { class: 'small', style: 'color:var(--bad);grid-column:1/-1' + (r.url && !PE_resUrlOk(r.url) ? '' : ';display:none') }, '⚠ Invalid URL — please enter a valid web address starting with https://. A resource without a valid link is not shown to students.');
       url.addEventListener('input', () => { r.url = url.value.trim(); bad.style.display = r.url && !PE_resUrlOk(r.url) ? '' : 'none'; this.saveResources(); });
+      url.addEventListener('change', () => { const n = pracNormUrl(url.value); if (n !== url.value) { url.value = n; r.url = n; bad.style.display = r.url && !PE_resUrlOk(r.url) ? '' : 'none'; this.saveResources(true); } });
       const note = el('input', { type: 'text', placeholder: 'Short note for students (optional)', value: r.note || '', class: 'note' });
       note.addEventListener('input', () => { r.note = note.value; this.saveResources(); });
       const move = (dir) => { const j = i + dir; if (j < 0 || j >= list.length) return; [list[i], list[j]] = [list[j], list[i]]; this.saveResources(true); this.paintResources(); };
@@ -8627,17 +8707,51 @@ const PracEditor = {
     });
     return el('span', null, inp, el('button', { class: 'btn btn-sm', type: 'button', onclick: () => inp.click() }, '⤒ Upload images'));
   },
-  async addImageByLink(slot) {
-    const u = await promptDialog('Add image by link', 'Image web address (https://…)', { placeholder: 'https://…', okLabel: 'Add image', hint: 'Use only images you are allowed to reuse. Uploading the file is better for printed handouts.' });
-    if (u === null) return; const url = String(u).trim();
-    if (!/^https:\/\/[^\s]+$/i.test(url)) { toast('Please enter a full https:// image address.', 'bad'); return; }
-    this.d.images.push({ id: uid('img'), slot, kind: slot === 'additional' ? 'clinical' : slot, url, fileId: '', w: 0, h: 0, caption: '', annotation: '', stain: slot === 'micro' ? (this.d.stain || '') : '', magnification: '', marks: [], active: true });
-    this.changed(); this.paintImages();
+  addImageByLink(slot) {
+    const urlIn = el('input', { type: 'url', placeholder: 'https://… (the address of the picture)', 'aria-label': 'Image address' });
+    const cap = el('input', { type: 'text', placeholder: 'e.g. Lipoma — cut surface', 'aria-label': 'Caption' });
+    const prev = el('div', { class: 'prac-link-prev' }), msg = el('div', { class: 'small' });
+    let seq = 0, loaded = false, checked = null;
+    const target = () => pracNormImageUrl(urlIn.value);
+    const say = (cls, t) => { msg.className = cls; msg.textContent = t; };
+    const check = () => {
+      const u = target(); if (u === checked) return;   // unchanged (e.g. focus moving to a button): keep the preview, no layout jump
+      checked = u; const n = ++seq; loaded = false; clear(prev); say('small', '');
+      if (!u) return;
+      if (!pracHttpsOk(u)) { say('msg bad small', 'Invalid URL — please enter a valid HTTPS address (starting with https://).'); return; }
+      const im = el('img', { alt: 'Preview' }); im.referrerPolicy = 'no-referrer';
+      im.addEventListener('load', () => { if (n !== seq) return; loaded = true; say('msg ok small', '✓ Picture found (' + im.naturalWidth + ' × ' + im.naturalHeight + ' px)' + (u !== urlIn.value.trim() ? ' — the Google Drive link was converted to its picture address.' : '.')); });
+      im.addEventListener('error', () => { if (n !== seq) return; im.remove(); say('msg warn small', (pracUrlKind(u) === 'page' ? 'This address is a web page, not a picture.' : 'The picture could not be shown — the website may not allow embedded images, or this is not a picture address.') + ' Add it as a resource link, or keep it as an image: the address is saved and students get an “Open image/resource” link.'); });
+      im.src = u; prev.appendChild(im); say('small muted', 'Loading preview…');
+    };
+    urlIn.addEventListener('input', debounce(check, 450));   // not on 'change': leaving the field to click a button must not move the buttons
+    const invalid = () => { const u = target(); if (!u) { say('msg bad small', 'Paste the address of the picture first.'); return true; } if (!pracHttpsOk(u)) { say('msg bad small', 'Invalid URL — please enter a valid HTTPS address (starting with https://).'); return true; } return false; };
+    openModal({
+      title: '🔗 Add image by link',
+      body: el('div', { class: 'stack' }, el('label', { class: 'field' }, 'Image address (https://…)', urlIn), prev, msg, el('label', { class: 'field' }, 'Caption (optional)', cap),
+        el('p', { class: 'small muted mb0' }, 'The picture is shown from its own website — nothing is copied. Use only images you are allowed to reuse. A Google Drive share link works if the file is shared with “Anyone with the link”. Uploading the file is better for printed handouts.')),
+      actions: [{ label: 'Cancel' },
+        { label: 'Add as resource link', keepOpen: true, onClick: (close) => {
+          if (invalid()) return false;
+          const u = pracNormUrl(urlIn.value), list = this.d.resources || (this.d.resources = []);
+          list.push({ id: uid('res'), type: 'resource', title: cap.value.trim() || pracHost(u), url: u, note: '', active: true });
+          this.saveResources(true); this.paintResources(); close(true); toast('Added under Resources.', 'ok'); return true;
+        } },
+        { label: 'Add image', primary: true, keepOpen: true, onClick: (close) => {
+          if (invalid()) return false;
+          this.d.images.push({ id: uid('img'), slot, kind: slot === 'additional' ? 'clinical' : slot, url: target(), fileId: '', w: 0, h: 0, caption: cap.value.trim(), annotation: '', stain: slot === 'micro' ? (this.d.stain || '') : '', magnification: '', marks: [], active: true });
+          this.changed(); this.paintImages(); close(true);
+          if (!loaded) toast('Image added. Its picture could not be previewed — students get an “Open image/resource” link if it cannot be shown.', 'warn', 6000);
+          return true;
+        } }]
+    });
+    setTimeout(() => urlIn.focus(), 60);
   },
   imageCard(im) {
     const d = this.d;
-    const img = el('img', { alt: '' }); PracImages.setSrc(img, im.url);
+    const img = el('img', { alt: '' }); PracImages.setSrc(img, pracImgUrl(im));
     img.addEventListener('load', () => { if (!im.w) { this.imageInfo[im.id] = { w: img.naturalWidth, h: img.naturalHeight }; this.paintQc(); } });
+    img.addEventListener('error', () => pracImgFallback(img.parentNode, pracImgUrl(im), true));
     const inp = (key, ph) => { const x = el('input', { value: im[key] || '', placeholder: ph }); x.addEventListener('input', () => { im[key] = x.value; this.changed(); }); return x; };
     const kinds = slotKinds(im.slot);
     const kindSel = el('select', { onchange: (e) => { im.kind = e.target.value; this.changed(false); } }, kinds.map(k => el('option', { value: k, selected: im.kind === k }, PE_IMAGE_KINDS[k])));
@@ -8659,7 +8773,7 @@ const PracEditor = {
       el('div', { class: 'stack', style: 'flex:1;min-width:0' },
         el('div', { class: 'row between' },
           el('label', { class: 'prac-switch', title: 'Visible to students when ON' }, sw, el('span', null, im.active === false ? 'Inactive — hidden from students' : 'Active')),
-          el('div', { class: 'small ' + (lowres ? 'bad' : 'muted') }, im.w ? im.w + '×' + im.h + ' px' + (lowres ? ' — ⚠ low resolution: may print blurry' : ' ✓ print quality') : 'Linked image')),
+          el('div', { class: 'small ' + (lowres ? 'bad' : 'muted') }, im.w ? im.w + '×' + im.h + ' px' + (lowres ? ' — ⚠ low resolution: may print blurry' : ' ✓ print quality') : /^https?:/i.test(pracImgUrl(im)) ? el('a', { href: pracImgUrl(im), target: '_blank', rel: 'noopener noreferrer', title: pracImgUrl(im) }, 'Linked image · ' + pracHost(pracImgUrl(im)) + ' ↗') : 'Linked image')),
         el('div', { class: 'field-row' }, el('label', { class: 'field' }, 'Title / caption (optional)', inp('caption', 'e.g. Lipoma — cut surface')), el('label', { class: 'field' }, 'Group', slotSel), el('label', { class: 'field' }, 'Image type', kindSel)),
         el('div', { class: 'field-row' }, el('label', { class: 'field' }, 'Stain', inp('stain', 'H&E')), el('label', { class: 'field' }, 'Magnification', inp('magnification', '×400')), el('label', { class: 'field' }, 'Annotation / note', inp('annotation', 'e.g. arrows: keratin pearls'))),
         el('div', { class: 'row' },
