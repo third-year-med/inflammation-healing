@@ -13975,7 +13975,7 @@ const Live = {
   interval() {
     let base = this.nextPollMs || 2500;
     if (document.hidden) base = Math.max(base, 20000);
-    else if (!this.viewing) base = Math.max(base * 1.4, 3500); // still prompt for notifications on other pages
+    else if (!this.viewing) base = Math.max(base * 2, 8000);   // on other pages: notifications within ~8 s, far fewer requests for the class server
     if (this.failures) base = Math.min(30000, 2000 * Math.pow(2, this.failures - 1));
     return base + Math.floor(Math.random() * 400); // jitter so a class never polls in lock-step
   },
