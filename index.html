@@ -317,6 +317,10 @@ table.syl tr:hover td{background:#f2fbfa}
 .lb-content .svg-host{background:#fff;border-radius:10px;padding:14px}
 .lb-content .svg-host svg{display:block}
 .lb-cap{padding:.55rem .9rem .9rem;color:#cfdbe7;font-size:.86rem;text-align:center}
+/* touch: the viewer owns every gesture (pinch/drag never zooms or scrolls the page underneath) */
+.lightbox{touch-action:none;overscroll-behavior:contain;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.lb-bar{flex-wrap:wrap}.lb-bar .btn{min-height:38px;min-width:40px}.lb-bar .lb-close{font-weight:800}
+.lb-cap{max-height:28vh;overflow:auto;touch-action:pan-y}
 
 /* ---------- Modal & toast ---------- */
 .modal-back{position:fixed;inset:0;background:rgba(9,24,40,.55);z-index:500;display:flex;align-items:flex-start;justify-content:center;padding:4vh 1rem;overflow:auto;animation:fadeIn .15s}
@@ -466,6 +470,18 @@ table.syl tr:hover td{background:#f2fbfa}
 .slide-img.size-s{width:18%}.slide-img.size-m{width:30%}.slide-img.size-l{width:44%}.slide-img.size-xl{width:62%}.slide-img.size-full{width:100%}
 .slide-img.float-left{float:left;margin:0 calc(var(--u)*1.2) calc(var(--u)*.6) 0}
 .slide-img.float-right{float:right;margin:0 0 calc(var(--u)*.6) calc(var(--u)*1.2)}
+/* visible "enlarge" control on every slide image (a real button on slide images; an icon inside the gallery's own button) */
+.slide-img{position:relative}
+.pz-zoom{position:absolute;top:.4em;right:.4em;z-index:2;display:grid;place-items:center;font-size:clamp(14px,calc(var(--u)*1.05),24px);width:max(38px,2.3em);height:max(38px,2.3em);padding:0;border:0;border-radius:999px;background:rgba(11,42,74,.74);color:#fff;cursor:zoom-in;box-shadow:0 2px 8px rgba(0,0,0,.28);opacity:.88;line-height:1}
+.pz-zoom svg{width:58%;height:58%;display:block}
+.pz-zoom:hover,.pz-zoom:focus-visible,.gal-media:hover .pz-zoom{opacity:1}
+.pz-zoom:focus-visible{outline:3px solid var(--teal);outline-offset:2px}
+.slide-img.img-broken .pz-zoom,.pres-stage.pe-editing .pz-zoom{display:none}
+/* swipe navigation: the stage keeps vertical scrolling but horizontal moves are ours (no page pan, no double-tap zoom) */
+.pres-stage-outer{touch-action:pan-y;overscroll-behavior:contain}
+html.pres-active,html.pres-active body{overscroll-behavior-x:none}
+.pres-stage-outer.pz-swiping{-webkit-user-select:none;user-select:none}
+.pres-stage .slide.pz-settle{transition:transform .18s ease}
 .slide .body::after{content:"";display:block;clear:both}
 .pres-notes{flex:0 0 auto;max-height:28%;overflow:auto;border-top:1px solid var(--line);background:#fffdf3;padding:.6rem .9rem;font-size:.92rem;color:#4d3d00}
 .pres-notes b{color:#7a5a00}
@@ -2163,22 +2179,27 @@ function mdToPlain(src) {
 function openLightbox(items, startIndex) {
   const list = Array.isArray(items) ? items : [items];
   let idx = startIndex || 0;
-  let scale = 1, tx = 0, ty = 0;
+  // In native fullscreen only the fullscreen element is painted: a viewer appended to <body> would be invisible
+  // (yet swallow every key), so it is mounted inside the fullscreen element and never touches its fullscreen state.
+  const fsHost = document.fullscreenElement || document.webkitFullscreenElement || null;
+  const opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : null;
+  let scale = 1, tx = 0, ty = 0, fitScale = 1;
   const content = el('div', { class: 'lb-content' });
   const stage = el('div', { class: 'lb-stage' }, content);
   const cap = el('div', { class: 'lb-cap' });
   const counter = el('span', { class: 'small' });
   const prevBtn = el('button', { class: 'btn btn-sm', onclick: () => go(-1), 'aria-label': 'Previous image' }, '◀');
   const nextBtn = el('button', { class: 'btn btn-sm', onclick: () => go(1), 'aria-label': 'Next image' }, '▶');
+  const closeBtn = el('button', { class: 'btn btn-sm lb-close', type: 'button', onclick: (e) => close(e), 'aria-label': 'Close image viewer' }, '✕ Close');
   const bar = el('div', { class: 'lb-bar' },
-    el('span', { class: 'grow' }, '🔍 Scroll / pinch to zoom · drag to pan · double-click to reset'),
+    el('span', { class: 'grow' }, '🔍 Pinch / scroll to zoom · drag to pan · double-tap to reset'),
     list.length > 1 ? prevBtn : null, list.length > 1 ? counter : null, list.length > 1 ? nextBtn : null,
     el('button', { class: 'btn btn-sm', onclick: () => zoom(1.25), 'aria-label': 'Zoom in' }, '＋'),
     el('button', { class: 'btn btn-sm', onclick: () => zoom(0.8), 'aria-label': 'Zoom out' }, '－'),
     el('button', { class: 'btn btn-sm', onclick: () => reset(), 'aria-label': 'Reset zoom' }, '1:1'),
-    el('button', { class: 'btn btn-sm', onclick: () => { try { if (document.fullscreenElement) document.exitFullscreen(); else box.requestFullscreen(); } catch (e) { /* unsupported */ } }, 'aria-label': 'Full screen' }, '⛶'),
+    fsHost ? null : el('button', { class: 'btn btn-sm', onclick: () => { try { if (document.fullscreenElement === box) document.exitFullscreen(); else if (!document.fullscreenElement && box.requestFullscreen) box.requestFullscreen().catch(() => { }); } catch (e) { /* unsupported */ } }, 'aria-label': 'Full screen' }, '⛶'),
     list.some(it => it.download) ? el('button', { class: 'btn btn-sm', 'aria-label': 'Download original', onclick: () => { const d = list[idx].download; if (!d) return; const a = el('a', { href: d.url, download: d.name || 'image' }); document.body.appendChild(a); a.click(); a.remove(); } }, '⤓ Download') : null,
-    el('button', { class: 'btn btn-sm', onclick: () => close(), 'aria-label': 'Close' }, '✕ Close'));
+    closeBtn);
   const box = el('div', { class: 'lightbox', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Image viewer' }, bar, stage, cap);
   const apply = () => { content.style.transform = `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(${scale})`; };
   const zoom = (f) => { scale = clamp(scale * f, 0.3, 10); apply(); };
@@ -2188,7 +2209,7 @@ function openLightbox(items, startIndex) {
     const sw = stage.clientWidth - 40, sh = stage.clientHeight - 40;
     let w = node.naturalWidth || node.scrollWidth || 800, h = node.naturalHeight || node.scrollHeight || 600;
     if (node.classList && node.classList.contains('svg-host')) { w = node.offsetWidth; h = node.offsetHeight; }
-    scale = Math.min(1.6, sw / w, sh / h); if (!isFinite(scale) || scale <= 0) scale = 1;
+    scale = Math.min(1.6, sw / w, sh / h); if (!isFinite(scale) || scale <= 0) scale = 1; fitScale = scale;
     tx = 0; ty = 0; apply();
   }
   function show() {
@@ -2208,31 +2229,63 @@ function openLightbox(items, startIndex) {
     counter.textContent = (idx + 1) + ' / ' + list.length;
   }
   function go(d) { idx = (idx + d + list.length) % list.length; show(); }
-  function close() { try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { } box.remove(); document.removeEventListener('keydown', onKey, true); }
+  function close(ev) {
+    if (ev) { ev.preventDefault(); ev.stopPropagation(); }
+    // leave fullscreen only if the viewer itself entered it — never the presentation's fullscreen
+    try { if (document.fullscreenElement === box) document.exitFullscreen().catch(() => { }); } catch (e) { }
+    box.remove(); document.removeEventListener('keydown', onKey, true);
+    if (ev && (ev.type === 'pointerup' || (ev.type === 'click' && ev.detail > 0 && lastPtr !== 'mouse'))) lbSwallowClicks(); // a touch tap: no stray click on the slide underneath
+    if (opener && opener.isConnected) { try { opener.focus({ preventScroll: true }); } catch (e) { } }
+  }
   const onKey = (e) => {
-    if (e.key === 'Escape') { e.stopPropagation(); close(); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
     else if (e.key === 'ArrowRight' && list.length > 1) { e.stopPropagation(); go(1); }
     else if (e.key === 'ArrowLeft' && list.length > 1) { e.stopPropagation(); go(-1); }
     else if (e.key === '+' || e.key === '=') zoom(1.2); else if (e.key === '-') zoom(0.83);
   };
   // pointer-based pan + pinch
-  const pts = new Map(); let last = null; let pinch0 = null;
-  stage.addEventListener('pointerdown', e => { stage.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); last = { x: e.clientX, y: e.clientY }; stage.classList.add('dragging'); });
+  const pts = new Map(); let last = null; let pinch0 = null; let down = null; let tap0 = null; let lastPtr = 'mouse';
+  box.addEventListener('pointerdown', e => { lastPtr = e.pointerType || 'mouse'; }, true);
+  // touch: close when the finger lifts — a browser may drop the click of a tap that follows a fast drag
+  closeBtn.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse' && box.isConnected) close(e); });
+  stage.addEventListener('pointerdown', e => { e.preventDefault(); try { stage.setPointerCapture(e.pointerId); } catch (err) { } pts.set(e.pointerId, { x: e.clientX, y: e.clientY }); last = { x: e.clientX, y: e.clientY }; down = pts.size === 1 ? { x: e.clientX, y: e.clientY, t: Date.now(), moved: false } : null; stage.classList.add('dragging'); });
   stage.addEventListener('pointermove', e => {
     if (!pts.has(e.pointerId)) return;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 10) down.moved = true;
     if (pts.size === 2) {
       const [a, b] = [...pts.values()]; const d = Math.hypot(a.x - b.x, a.y - b.y);
       if (pinch0) { scale = clamp(pinch0.scale * d / pinch0.d, 0.3, 10); apply(); } else pinch0 = { d, scale };
     } else if (last) { tx += e.clientX - last.x; ty += e.clientY - last.y; last = { x: e.clientX, y: e.clientY }; apply(); }
   });
-  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch0 = null; if (!pts.size) { last = null; stage.classList.remove('dragging'); } };
+  const up = e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.delete(e.pointerId); if (pts.size < 2) pinch0 = null;
+    if (pts.size === 1) { const p = [...pts.values()][0]; last = { x: p.x, y: p.y }; down = null; } // pinch → one finger: keep panning from where it is, no jump
+    if (!pts.size) {
+      last = null; stage.classList.remove('dragging');
+      // touch has no dblclick: two quick taps zoom in (or back to fit when already zoomed)
+      if (e.type === 'pointerup' && e.pointerType !== 'mouse' && down && !down.moved && Date.now() - down.t < 300) {
+        if (tap0 && Date.now() - tap0.t < 350 && Math.hypot(e.clientX - tap0.x, e.clientY - tap0.y) < 30) { tap0 = null; if (scale > fitScale * 1.15) reset(); else zoom(2); }
+        else tap0 = { x: e.clientX, y: e.clientY, t: Date.now() };
+      }
+      down = null;
+    }
+  };
   stage.addEventListener('pointerup', up); stage.addEventListener('pointercancel', up);
+  box.addEventListener('gesturestart', e => e.preventDefault()); // older iOS Safari: no page zoom while the viewer is open
   stage.addEventListener('wheel', e => { e.preventDefault(); zoom(e.deltaY < 0 ? 1.12 : 0.89); }, { passive: false });
   stage.addEventListener('dblclick', reset);
-  document.body.appendChild(box);
+  (fsHost || document.body).appendChild(box);
   document.addEventListener('keydown', onKey, true);
   show();
+  try { closeBtn.focus({ preventScroll: true }); } catch (e) { }
+}
+/** After the image viewer closes, swallow the click a touch screen may still deliver to whatever was underneath. */
+function lbSwallowClicks() {
+  const until = Date.now() + 320;
+  const h = (e) => { if (Date.now() > until) { window.removeEventListener('click', h, true); return; } e.preventDefault(); e.stopPropagation(); };
+  window.addEventListener('click', h, true); setTimeout(() => window.removeEventListener('click', h, true), 400);
 }
 
 /* ---------- Files, downloads, CSV ---------- */
@@ -5914,6 +5967,7 @@ function resolveImgUrl(u) {
   return u;
 }
 /** Shared image renderer (slides, question cards, live activities). allowFloat only on content/question slides. */
+const PZ_ZOOM_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/></svg>';
 function buildSlideImages(images, allowFloat) {
   return (images || []).filter(im => im && im.url).map(im => {
     const size = ['s', 'm', 'l', 'xl', 'full'].includes(im.size) ? im.size : 'm';
@@ -5925,14 +5979,15 @@ function buildSlideImages(images, allowFloat) {
     // so this has to be caught up front rather than relying on the image failing to load.
     let broken = !isFig && !src;
     const img = el('img', { src, alt: im.caption || 'Slide image', loading: 'lazy' });
-    const fig = el('figure', { class: 'slide-img size-' + size + (align !== 'center' ? ' float-' + align : '') }, img, im.caption ? el('figcaption', null, im.caption) : null);
+    const zoomBtn = el('button', { type: 'button', class: 'pz-zoom', title: 'Enlarge image', 'aria-label': 'Enlarge image' + (im.caption ? ': ' + im.caption : ''), html: PZ_ZOOM_SVG });
+    const fig = el('figure', { class: 'slide-img size-' + size + (align !== 'center' ? ' float-' + align : '') }, img, zoomBtn, im.caption ? el('figcaption', null, im.caption) : null);
     const setBroken = () => {
       broken = true;
       fig.classList.add('img-broken');
       fig.title = 'Image unavailable';
       img.replaceWith(el('div', { class: 'small muted', style: 'padding:.5rem;border:1px dashed var(--line);border-radius:8px' }, '⚠ Image unavailable offline'));
     };
-    if (broken) setBroken(); else { fig.title = 'Click to enlarge'; img.addEventListener('error', setBroken); }
+    if (broken) setBroken(); else { fig.title = 'Tap or click to enlarge'; img.addEventListener('error', setBroken); }
     // The click handler lives on the <figure> (not the <img>) so the caption remains clickable too — but that
     // means it must not keep offering "enlarge" once the image is known to be broken, or clicking silently
     // opens an empty lightbox that looks unresponsive.
@@ -6005,7 +6060,7 @@ Views.present = {
     const edit = el('div', { class: 'pres-edit hidden' });
     wrap.appendChild(bar); wrap.appendChild(outer); wrap.appendChild(notes); wrap.appendChild(edit);
     page.appendChild(wrap);
-    page.appendChild(el('p', { class: 'pres-hint', style: 'margin:.5rem .2rem 0' }, 'Keys: ← → (or Space/PageUp/PageDown) to move · Home/End · F fullscreen · O overview · N speaker notes · R reveal answer · S step through a flowchart · Esc to exit.'));
+    page.appendChild(el('p', { class: 'pres-hint', style: 'margin:.5rem .2rem 0' }, 'Swipe left/right on a touch screen, or keys: ← → (or Space/PageUp/PageDown) to move · Home/End · F fullscreen · O overview · N speaker notes · R reveal answer · S step through a flowchart · Esc to exit · tap 🔍 on an image to enlarge it.'));
     v.appendChild(page);
     this.els = { wrap, bar, outer, stage, notes, edit };
     this.mounted = true;
@@ -6354,6 +6409,82 @@ document.addEventListener('keydown', (e) => {
   else if (k === 's' || k === 'S') { e.preventDefault(); P.stepDiagram(); }
   else if (k === 'Escape') { if (P.overview) P.toggleOverview(); else if (P.els.wrap.classList.contains('pres-fullscreen')) P.toggleFullscreen(); }
 });
+
+/* Swipe navigation for Presentation Mode (touch, pen and mouse) — swipe left = next slide, swipe right = previous.
+   Buttons and keys are unchanged. A gesture only counts when it is a single pointer, clearly horizontal
+   (|dx| > 1.5·|dy|) and long enough; it is ignored when it starts on a control, link, question option, chip,
+   the image viewer, the overview, in slide-edit mode, or near the screen edge (the OS back gesture lives there). */
+(function () {
+  const P = Views.present; if (!P) return;
+  const SKIP = 'a,button,input,select,textarea,label,summary,details,iframe,video,audio,[contenteditable="true"],[role="button"],[role="slider"],[role="dialog"],.q-opts,.tally,.gal-linkbox,.gal-chip,.pres-overview,.pe-bar,.lightbox,.modal-back';
+  let g = null, swallowUntil = 0, outerEl = null;
+  const blocked = () => P.edit || P.overview || !!document.querySelector('.modal-back,.lightbox');
+  const slideEl = () => P.els.stage && P.els.stage.querySelector('.slide');
+  function hScrollable(n, stop) {
+    for (; n && n !== stop && n.nodeType === 1; n = n.parentElement) {
+      if (n.scrollWidth > n.clientWidth + 2) { const ox = getComputedStyle(n).overflowX; if (ox === 'auto' || ox === 'scroll') return true; }
+    }
+    return false;
+  }
+  function drag(dx, settle) {
+    const s = slideEl(); if (!s) return;
+    s.classList.toggle('pz-settle', !!settle);
+    s.style.transform = dx ? 'translateX(' + dx.toFixed(1) + 'px)' : '';
+  }
+  function end(e, cancelled) {
+    if (!g || (e && e.pointerId !== g.id)) return;
+    const G = g; g = null;
+    if (outerEl) outerEl.classList.remove('pz-swiping');
+    drag(0, true);
+    if (cancelled || G.multi || G.dir !== 'h') return;
+    const dx = e.clientX - G.x, dy = e.clientY - G.y;
+    if (Math.abs(dx) > 10) swallowUntil = Date.now() + 450; // a horizontal drag over an image must not also open it
+    const min = G.type === 'mouse' ? 80 : 50;
+    if (Math.abs(dx) < min || Math.abs(dx) <= Math.abs(dy) * 1.5 || Date.now() - G.t > 1200 || blocked()) return;
+    if (dx < 0) P.next(); else P.prev();
+  }
+  function bind(outer) {
+    outerEl = outer;
+    outer.addEventListener('pointerdown', e => {
+      if (g) { g.multi = true; drag(0, true); return; } // second finger (pinch / two-finger gesture): never a swipe
+      if (!e.isPrimary || (e.pointerType === 'mouse' && e.button !== 0) || blocked()) return;
+      const t = e.target; if (!t || !t.closest || t.closest(SKIP) || hScrollable(t, outer)) return;
+      if (e.pointerType !== 'mouse' && (e.clientX < 20 || e.clientX > window.innerWidth - 20)) return;
+      g = { id: e.pointerId, type: e.pointerType, x: e.clientX, y: e.clientY, t: Date.now(), dir: null, multi: false };
+    });
+    window.addEventListener('pointermove', e => {
+      if (!g) return;
+      if (e.pointerId !== g.id) { if (e.pointerType !== 'mouse') { g.multi = true; drag(0, true); } return; }
+      if (g.multi) return;
+      const dx = e.clientX - g.x, dy = e.clientY - g.y;
+      if (!g.dir && Math.hypot(dx, dy) > 10) {
+        g.dir = Math.abs(dx) > Math.abs(dy) * 1.2 ? 'h' : 'v';
+        if (g.dir === 'h') { outer.classList.add('pz-swiping'); if (g.type === 'mouse') { try { window.getSelection().removeAllRanges(); } catch (err) { } } }
+      }
+      if (g.dir !== 'h') return;
+      if (e.cancelable) e.preventDefault();
+      const n = P.list().length;
+      const atEnd = (dx < 0 && P.idx >= n - 1) || (dx > 0 && P.idx <= 0);
+      drag(dx * (atEnd ? 0.12 : 0.35), false); // light follow-the-finger feedback; resists at the first/last slide
+    }, { passive: false });
+    window.addEventListener('pointerup', e => end(e, false));
+    window.addEventListener('pointercancel', e => end(e, true)); // the browser took over (vertical scroll, system gesture)
+    // a mouse drag over a slide picture would start the browser's own image drag-and-drop instead of a swipe
+    outer.addEventListener('dragstart', e => { if (e.target && e.target.tagName === 'IMG') e.preventDefault(); });
+    // capture phase, before the slide editor and image handlers: the click that ends a swipe is not a tap
+    outer.addEventListener('click', e => { if (Date.now() < swallowUntil) { e.preventDefault(); e.stopPropagation(); } }, true);
+  }
+  // keep the browser's horizontal overscroll (trackpad / Android back-forward) out of the presentation only
+  const syncActive = () => document.documentElement.classList.toggle('pres-active', Router.current === 'present');
+  const show0 = P.show;
+  P.show = function () {
+    const r = show0.apply(this, arguments);
+    if (!this._pzBound && this.els && this.els.outer) { this._pzBound = true; bind(this.els.outer); }
+    syncActive();
+    return r;
+  };
+  window.addEventListener('hashchange', () => setTimeout(syncActive, 0));
+})();
 
 /* ==========================================================================
    45_practical.js — Practical image bank (teacher-authored; starts empty)
@@ -16733,6 +16864,7 @@ function pmFigure(o, hide) {
     credit = cr ? el('span', null, cr) : null;
     lb = () => openLightbox({ src: img.currentSrc || img.src, caption: hide ? '' : cap, credit: cr || '' });
   }
+  box.appendChild(el('span', { class: 'pz-zoom', 'aria-hidden': 'true', html: PZ_ZOOM_SVG }));
   box.setAttribute('aria-label', 'Enlarge image' + (hide ? '' : cap ? ': ' + cap : ''));
   box.addEventListener('click', e => { e.stopPropagation(); if (lb) lb(); });
   return el('figure', { class: 'gal-fig' }, box,
