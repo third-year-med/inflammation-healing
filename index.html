@@ -486,6 +486,8 @@ html.pres-active,html.pres-active body{overscroll-behavior-x:none}
 .pres-stage .slide.pz-settle{transition:transform .18s ease}
 /* the open attendance code — bottom-right of the slide area, on every slide and in fullscreen; display only (never blocks a tap or swipe) */
 .pres-att{position:absolute;right:max(8px,1.1vmin);bottom:max(8px,1.1vmin);z-index:610;pointer-events:none;display:flex;align-items:baseline;flex-wrap:wrap;gap:0 .45em;max-width:calc(100% - 16px);padding:.3em .7em .35em;border-radius:.7em;background:rgba(11,42,74,.88);color:#fff;font-weight:700;line-height:1.15;font-size:clamp(12px,1.75vmin,24px);box-shadow:0 4px 14px rgba(0,0,0,.28)}
+.pres-att .pa-row{display:flex;align-items:baseline;flex-wrap:wrap;gap:0 .45em}.pres-att .pa-row+.pa-row{margin-top:.15em}.pres-att .pa-g{font-size:.85em;opacity:.85;white-space:nowrap}
+.pres-att{flex-direction:column;align-items:flex-end}
 .pres-att .pa-l{opacity:.9;white-space:nowrap}
 .pres-att .pa-c{font-size:1.7em;letter-spacing:.12em;font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:nowrap}
 .pres-att.pa-stale .pa-c{opacity:.8}
@@ -6517,13 +6519,14 @@ document.addEventListener('keydown', (e) => {
   const can = () => Router.current === 'present' && Auth.isTeacher() && Backend.isConfigured() && !!Backend.token();
   function paint() {
     const outer = P.els && P.els.outer; if (!outer) return;
-    if (!cur || !Auth.isTeacher()) { if (badge) badge.remove(); badge = null; return; }
-    if (!badge || badge.parentNode !== outer) {
-      badge = el('div', { class: 'pres-att', role: 'status' }, el('span', { class: 'pa-l' }, 'Attendance Code:'), el('b', { class: 'pa-c' }));
-      outer.appendChild(badge);
+    if (!cur || !cur.items.length || !Auth.isTeacher()) { if (badge) badge.remove(); badge = null; return; }
+    if (!badge || badge.parentNode !== outer) { badge = el('div', { class: 'pres-att', role: 'status' }); outer.appendChild(badge); }
+    const many = cur.items.length > 1, sig = cur.items.map(x => x.code + '|' + (many ? x.group : '')).join(',');
+    if (badge.dataset.sig !== sig) {   // redrawn only when a code appears, changes or goes
+      badge.dataset.sig = sig; clear(badge);
+      cur.items.forEach(x => badge.appendChild(el('span', { class: 'pa-row' }, el('span', { class: 'pa-l' }, 'Attendance Code:'), el('b', { class: 'pa-c' }, x.code), many && x.group ? el('span', { class: 'pa-g' }, x.group) : null)));
     }
-    const c = badge.querySelector('.pa-c'); if (c.textContent !== cur.code) c.textContent = cur.code;
-    badge.setAttribute('aria-label', 'Attendance code ' + cur.code.split('').join(' ') + (cur.title ? ' — ' + cur.title : ''));
+    badge.setAttribute('aria-label', cur.items.map(x => 'Attendance code ' + x.code.split('').join(' ') + (x.group ? ', ' + x.group : '') + (x.title ? ' — ' + x.title : '')).join('; '));
     badge.classList.toggle('pa-stale', !!cur.stale);
     place();
   }
@@ -6545,10 +6548,19 @@ document.addEventListener('keydown', (e) => {
     if (!can()) { stop(); return; }
     if (busy) return; busy = true;
     try {
-      const r = await Backend.authedPost({ action: 'listAttendanceSessions' }, { timeout: 15000 });
-      if (r && r.ok) {
-        const a = (r.sessions || []).filter(x => x && x.status === 'active' && x.code)[0];   // newest first
-        cur = a ? { id: a.sessionId, code: String(a.code), title: a.sessionTitle || '' } : null;   // closed by the teacher → gone
+      // 1) this page's own attendance (Teacher Portal → Attendance, or a lecture of this very group);
+      // 2) Portal.gs 2.12: lectures opened in Teaching Sessions for this module — when the Admin opened the module's main
+      //    page (no group), the live lectures of every group of this module; a group page: only that group. Read-only.
+      const [r, pr] = await Promise.all([
+        Backend.authedPost({ action: 'listAttendanceSessions' }, { timeout: 15000 }),
+        Backend.rawPost({ module: 'portal', action: 'tsPresentCodes', storage: MODULE_KEY, token: Backend.token() }, { timeout: 15000 }).catch(() => null)
+      ]);
+      const ownOk = !!(r && r.ok), platOk = !!(pr && (pr.ok || pr.code === 'badaction'));   // an older Portal.gs: just not available
+      if (ownOk && platOk) {
+        const items = [];
+        (r.sessions || []).filter(x => x && x.status === 'active' && x.code).forEach(x => items.push({ code: String(x.code), title: x.sessionTitle || '', group: '' }));
+        ((pr && pr.ok && pr.live) || []).forEach(x => { if (x && x.code && !items.some(y => y.code === String(x.code))) items.push({ code: String(x.code), title: x.title || '', group: x.group || '' }); });
+        cur = items.length ? { items: items.slice(0, 4) } : null;   // closed by the teacher → gone
       } else if (cur) cur.stale = true;   // no answer / signed out: keep showing the last code — it is still open on the server
     } catch (e) { if (cur) cur.stale = true; }
     finally { busy = false; }
@@ -6561,7 +6573,7 @@ document.addEventListener('keydown', (e) => {
   window.addEventListener('hashchange', () => setTimeout(() => { if (Router.current !== 'present') stop(); else if (can()) start(); }, 0));
   document.addEventListener('visibilitychange', () => { if (!document.hidden && can()) { stop(); start(); } });   // back to the tab: check at once
   Bus.on('auth-changed', () => { if (!Auth.isTeacher()) { cur = null; stop(); paint(); } else if (can()) start(); });
-  window.__presAttendance = { poll: () => poll(), current: () => cur && cur.code };   // for diagnostics / tests
+  window.__presAttendance = { poll: () => poll(), current: () => cur && cur.items[0] && cur.items[0].code };   // for diagnostics / tests
 })();
 
 /* ==========================================================================
