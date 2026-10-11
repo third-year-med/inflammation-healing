@@ -140,6 +140,8 @@ main#app-main{flex:1 0 auto;width:100%}
 .footer .inner{max-width:1180px;margin:0 auto;display:flex;flex-wrap:wrap;gap:.6rem 1.4rem;justify-content:space-between;align-items:center}
 .footer .footer-credit{color:#e6f0f8;font-weight:600}
 .footer a{color:#9fe3dc}
+/* the footer card is hidden for a wider viewing area (2026-10-11); image credits stay with each image */
+.footer{display:none}
 
 /* ---------- Progress ---------- */
 .pbar{height:8px;background:#e5ecf3;border-radius:999px;overflow:hidden}
@@ -1596,6 +1598,16 @@ body.ux2 #view-revision .stat-strip{display:none}
 .ue-toggle.hidden { display: none; }
 body:has(.pres-wrap) .ue-toggle, body:has(.modal-back) .ue-toggle { display: none; }
 @media print { .ue-bar, .ue-toggle { display: none !important; } }
+/* in the header, right after “Portal” (2026-10-11): same look as the other header chips */
+#hdr-right .ue-toggle.in-hdr{position:static;left:auto;bottom:auto;z-index:auto;box-shadow:none;display:inline-flex;align-items:center;gap:.35rem;font-size:.75rem;font-weight:600;padding:.28rem .65rem;border-radius:999px;background:rgba(255,255,255,.12);color:#e8f1f8;border:1px solid rgba(255,255,255,.18);cursor:pointer;white-space:nowrap}
+#hdr-right .ue-toggle.in-hdr:hover{background:rgba(255,255,255,.2)}
+#hdr-right .ue-toggle.in-hdr.on{background:var(--accent,#0f766e);color:#fff;border-color:rgba(255,255,255,.55)}
+#hdr-right .ue-toggle.in-hdr.hidden{display:none}
+body:has(.modal-back) #hdr-right .ue-toggle.in-hdr{display:inline-flex}
+body:has(.pres-wrap) #hdr-right .ue-toggle.in-hdr{display:inline-flex}
+body:has(#view-present.active) #hdr-right .ue-toggle.in-hdr{display:none}
+#hdr-right .ue-toggle.in-hdr.hidden{display:none!important}
+@media (max-width:640px){#hdr-right .ue-toggle.in-hdr .lbl{display:none}#hdr-right .ue-toggle.in-hdr{padding:.28rem .55rem}}
 .ue-dialog .ue-tabs { margin-bottom: .6rem; }
 .ue-pane { display: grid; gap: .75rem; max-height: 62vh; overflow: auto; padding-right: .2rem; }
 .ue-field { border: 1px solid var(--border, #e2e8f0); border-radius: 10px; padding: .55rem .65rem; display: grid; gap: .4rem; }
@@ -4360,6 +4372,7 @@ function renderHeaderStatus() {
     fs.textContent = Backend.isConfigured() ? ('☁ Class server' + (ls ? ' · last sync ' + fmtDate(ls) : '')) : '💾 Local mode — progress is saved in this browser';
   }
   if (typeof uxTeacherLink === 'function') box.appendChild(uxTeacherLink()); // Stage 3
+  if (typeof window.__ueToggleMount === 'function') window.__ueToggleMount(); // ✎ Edit mode, right after “Portal”
   if (typeof LiveNotifyUI !== 'undefined') LiveNotifyUI.mountBell(box);
   const due = QStats.dueIds().length;
   setNavBadge('revision', due ? String(due) : '');
@@ -17740,7 +17753,8 @@ function ueLmr(it) { if (!it || !it._ueKind) return [null, null]; return [UE.bar
 
 /* ---------- Edit mode switch (teachers only; the same switch as Explanation's “✎ Edit mode”) ---------- */
 (function () {
-  const btn = el('button', { type: 'button', class: 'ue-toggle hidden', 'aria-pressed': 'false', title: 'Teacher: show or hide the edit controls for text, pictures, links and videos' }, '✎ Edit mode: OFF');
+  const lbl = el('span', { class: 'lbl' }, 'Edit mode: OFF');
+  const btn = el('button', { type: 'button', class: 'ue-toggle hidden', 'aria-pressed': 'false', 'aria-label': 'Edit mode: OFF', title: 'Teacher: show or hide the edit controls for text, pictures, links and videos' }, el('span', { 'aria-hidden': 'true' }, '✎'), lbl);
   let last = '', restored = false;
   const sync = () => {
     const teacher = (() => { try { return Auth.isTeacher(); } catch (e) { return false; } })();
@@ -17751,7 +17765,7 @@ function ueLmr(it) { if (!it || !it._ueKind) return [null, null]; return [UE.bar
     const on = teacher && !!Views.explain.editMode;
     const s = teacher + ':' + on; if (s === last) return; last = s;
     btn.classList.toggle('hidden', !teacher); btn.classList.toggle('on', on); btn.setAttribute('aria-pressed', String(on));
-    btn.textContent = on ? '✎ Edit mode: ON' : '✎ Edit mode: OFF';
+    lbl.textContent = on ? 'Edit mode: ON' : 'Edit mode: OFF'; btn.setAttribute('aria-label', lbl.textContent);
     if (teacher) { try { Store.sset('ue_edit_v1', on); } catch (e) { /* ignore */ } }
   };
   btn.addEventListener('click', async () => {
@@ -17761,7 +17775,14 @@ function ueLmr(it) { if (!it || !it._ueKind) return [null, null]; return [UE.bar
     if (Router.current === 'explain' && E.mounted) { E.renderSide(); E.renderMain(true); } else refreshAllContentViews();
     toast(E.editMode ? 'Edit mode ON — ✎ controls appear on every card you can edit.' : 'Edit mode OFF — this is what students see.');
   });
-  const mount = () => { if (!btn.isConnected) document.body.appendChild(btn); sync(); };
+  // in the header, right after the “Portal” link (the header is redrawn often, so this runs again after each redraw)
+  const mount = () => {
+    const link = document.querySelector('#hdr-right .ux-teacher-link');
+    if (link) { if (link.nextElementSibling !== btn) link.after(btn); btn.classList.add('in-hdr'); }
+    else if (!btn.isConnected) { btn.classList.remove('in-hdr'); document.body.appendChild(btn); }
+    sync();
+  };
+  window.__ueToggleMount = mount;
   if (document.body) mount(); else document.addEventListener('DOMContentLoaded', mount);
   setInterval(() => { try { if (Views.explain.editMode && !Auth.isTeacher()) Views.explain.editMode = false; mount(); } catch (e) { /* ignore */ } }, 800);
 })();
