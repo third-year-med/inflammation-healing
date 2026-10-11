@@ -482,6 +482,12 @@ table.syl tr:hover td{background:#f2fbfa}
 html.pres-active,html.pres-active body{overscroll-behavior-x:none}
 .pres-stage-outer.pz-swiping{-webkit-user-select:none;user-select:none}
 .pres-stage .slide.pz-settle{transition:transform .18s ease}
+/* the open attendance code — bottom-right of the slide area, on every slide and in fullscreen; display only (never blocks a tap or swipe) */
+.pres-att{position:absolute;right:max(8px,1.1vmin);bottom:max(8px,1.1vmin);z-index:610;pointer-events:none;display:flex;align-items:baseline;flex-wrap:wrap;gap:0 .45em;max-width:calc(100% - 16px);padding:.3em .7em .35em;border-radius:.7em;background:rgba(11,42,74,.88);color:#fff;font-weight:700;line-height:1.15;font-size:clamp(12px,1.75vmin,24px);box-shadow:0 4px 14px rgba(0,0,0,.28)}
+.pres-att .pa-l{opacity:.9;white-space:nowrap}
+.pres-att .pa-c{font-size:1.7em;letter-spacing:.12em;font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:nowrap}
+.pres-att.pa-stale .pa-c{opacity:.8}
+@media print{.pres-att{display:none}}
 .slide .body::after{content:"";display:block;clear:both}
 .pres-notes{flex:0 0 auto;max-height:28%;overflow:auto;border-top:1px solid var(--line);background:#fffdf3;padding:.6rem .9rem;font-size:.92rem;color:#4d3d00}
 .pres-notes b{color:#7a5a00}
@@ -6484,6 +6490,65 @@ document.addEventListener('keydown', (e) => {
     return r;
   };
   window.addEventListener('hashchange', () => setTimeout(syncActive, 0));
+})();
+
+/* Attendance code on the presentation screen (teacher only). While an attendance session of this module/group is open —
+   opened from the Teacher Dashboard (Teaching Sessions) or Teacher Portal → Attendance — its code stays in the bottom-right
+   corner of the slide area on every slide, in fullscreen and over the image viewer. It reuses the existing session and code
+   (listAttendanceSessions, teacher sign-in only) and never creates, changes or closes anything: slide changes, fullscreen,
+   time or a lost connection never hide it — only the teacher closing attendance does (the next check, within seconds). */
+(function () {
+  const P = Views.present; if (!P) return;
+  const POLL_MS = 8000;
+  let timer = null, busy = false, cur = null, badge = null;
+  const can = () => Router.current === 'present' && Auth.isTeacher() && Backend.isConfigured() && !!Backend.token();
+  function paint() {
+    const outer = P.els && P.els.outer; if (!outer) return;
+    if (!cur || !Auth.isTeacher()) { if (badge) badge.remove(); badge = null; return; }
+    if (!badge || badge.parentNode !== outer) {
+      badge = el('div', { class: 'pres-att', role: 'status' }, el('span', { class: 'pa-l' }, 'Attendance Code:'), el('b', { class: 'pa-c' }));
+      outer.appendChild(badge);
+    }
+    const c = badge.querySelector('.pa-c'); if (c.textContent !== cur.code) c.textContent = cur.code;
+    badge.setAttribute('aria-label', 'Attendance code ' + cur.code.split('').join(' ') + (cur.title ? ' — ' + cur.title : ''));
+    badge.classList.toggle('pa-stale', !!cur.stale);
+    place();
+  }
+  // stay inside the part of the slide area that is on screen (in the page view the bottom of the slides can be below the fold)
+  function place() {
+    const outer = P.els && P.els.outer; if (!badge || !outer || badge.parentNode !== outer) return;
+    const r = outer.getBoundingClientRect(), vv = window.visualViewport;
+    const vh = vv ? Math.min(innerHeight, vv.offsetTop + vv.height) : innerHeight, vw = vv ? Math.min(innerWidth, vv.offsetLeft + vv.width) : innerWidth;
+    const b = Math.min(Math.max(0, r.height - badge.offsetHeight - 16), Math.max(0, r.bottom - vh));
+    const rt = Math.min(Math.max(0, r.width - badge.offsetWidth - 16), Math.max(0, r.right - vw));
+    badge.style.bottom = b ? 'calc(max(8px,1.1vmin) + ' + Math.round(b) + 'px)' : '';
+    badge.style.right = rt ? 'calc(max(8px,1.1vmin) + ' + Math.round(rt) + 'px)' : '';
+  }
+  let raf = 0; const placeSoon = () => { if (badge && !raf) raf = requestAnimationFrame(() => { raf = 0; place(); }); };
+  window.addEventListener('scroll', placeSoon, { passive: true, capture: true }); window.addEventListener('resize', placeSoon);
+  document.addEventListener('fullscreenchange', () => setTimeout(place, 120));
+  if (window.visualViewport) { visualViewport.addEventListener('resize', placeSoon); visualViewport.addEventListener('scroll', placeSoon); }
+  async function poll() {
+    if (!can()) { stop(); return; }
+    if (busy) return; busy = true;
+    try {
+      const r = await Backend.authedPost({ action: 'listAttendanceSessions' }, { timeout: 15000 });
+      if (r && r.ok) {
+        const a = (r.sessions || []).filter(x => x && x.status === 'active' && x.code)[0];   // newest first
+        cur = a ? { id: a.sessionId, code: String(a.code), title: a.sessionTitle || '' } : null;   // closed by the teacher → gone
+      } else if (cur) cur.stale = true;   // no answer / signed out: keep showing the last code — it is still open on the server
+    } catch (e) { if (cur) cur.stale = true; }
+    finally { busy = false; }
+    paint();
+  }
+  function start() { paint(); if (timer) return; poll(); timer = setInterval(poll, POLL_MS); }
+  function stop() { if (timer) clearInterval(timer); timer = null; }
+  const show0 = P.show;
+  P.show = function () { const r = show0.apply(this, arguments); if (can()) start(); else paint(); return r; };
+  window.addEventListener('hashchange', () => setTimeout(() => { if (Router.current !== 'present') stop(); else if (can()) start(); }, 0));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && can()) { stop(); start(); } });   // back to the tab: check at once
+  Bus.on('auth-changed', () => { if (!Auth.isTeacher()) { cur = null; stop(); paint(); } else if (can()) start(); });
+  window.__presAttendance = { poll: () => poll(), current: () => cur && cur.code };   // for diagnostics / tests
 })();
 
 /* ==========================================================================
