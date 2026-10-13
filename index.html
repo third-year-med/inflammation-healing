@@ -2820,12 +2820,18 @@ const Backend = {
 
 /** Merge backend documents into State. full=true means the list is the complete truth. */
 function mergeBackendContent(items, full) {
+  // What the page shows now, to compare with after the merge: a sync that only brings back what this browser already has
+  // (its own saves echoed by the server, or the whole master draft re-sent on every check) must not rebuild the page —
+  // that rebuild reset images, slides and panels every 90 s / on every return to the tab (the "flicker").
+  const fp = () => { try { return JSON.stringify(Object.keys(STATE_SPEC).map(f => State[f])); } catch (e) { return null; } };
+  const before = items.length ? fp() : null;
   if (full) {
     for (const f of Object.keys(STATE_SPEC)) State[f] = STATE_SPEC[f].def();
   }
   for (const it of items) applyDoc(it.collection, it.id, it.data, !!it.deleted);
   // Re-apply writes still waiting in the offline queue so a sync never "undoes" unsent teacher edits.
   for (const op of Backend.pending()) applyDoc(op.collection, op.id, op.data, op.op === 'delete');
+  if (before !== null && before === fp()) return; // the same content as before → nothing to save or redraw, the page stays still
   saveAllState();
   if (!full && !items.length) return; // nothing changed on the server → leave the current page alone
   rebuildQuestions();
