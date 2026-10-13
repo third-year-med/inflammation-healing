@@ -6597,11 +6597,18 @@ document.addEventListener('keydown', (e) => {
 (function () {
   const P = Views.present; if (!P) return;
   const POLL_MS = 8000;
-  let timer = null, busy = false, cur = null, badge = null;
+  let timer = null, busy = false, cur = null, badge = null, own = null, plat = null, fails = 0, quick = null;
   const can = () => Router.current === 'present' && Auth.isTeacher() && Backend.isConfigured() && !!Backend.token();
   function paint() {
     const outer = P.els && P.els.outer; if (!outer) return;
-    if (!cur || !cur.items.length || !Auth.isTeacher()) { if (badge) badge.remove(); badge = null; return; }
+    // the server could not be reached yet and no code is known: say so (teacher only) instead of showing nothing
+    if ((!cur || !cur.items.length) && fails >= 3 && Auth.isTeacher()) cur = { items: [], offline: true };
+    if (!cur || (!cur.items.length && !cur.offline) || !Auth.isTeacher()) { if (badge) badge.remove(); badge = null; return; }
+    if (cur.offline) {
+      if (!badge || badge.parentNode !== outer) { badge = el('div', { class: 'pres-att', role: 'status' }); outer.appendChild(badge); }
+      if (badge.dataset.sig !== 'offline') { badge.dataset.sig = 'offline'; clear(badge); badge.appendChild(el('span', { class: 'pa-row' }, el('span', { class: 'pa-l' }, 'Attendance code: can’t reach the class server — retrying…'))); }
+      badge.classList.add('pa-stale'); place(); return;
+    }
     if (!badge || badge.parentNode !== outer) { badge = el('div', { class: 'pres-att', role: 'status' }); outer.appendChild(badge); }
     const many = cur.items.length > 1, sig = cur.items.map(x => x.code + '|' + (many ? x.group : '')).join(',');
     if (badge.dataset.sig !== sig) {   // redrawn only when a code appears, changes or goes
@@ -6637,15 +6644,22 @@ document.addEventListener('keydown', (e) => {
         Backend.authedPost({ action: 'listAttendanceSessions' }, { timeout: 15000 }),
         Backend.rawPost({ module: 'portal', action: 'tsPresentCodes', storage: MODULE_KEY, token: Backend.token() }, { timeout: 15000 }).catch(() => null)
       ]);
+      // 2026-10-14: each source counts on its own. Before, BOTH had to answer, so one slow or failed request (common on a
+      // busy Apps Script) hid a code the other one had returned. A source that fails keeps its last known codes (stale).
       const ownOk = !!(r && r.ok), platOk = !!(pr && (pr.ok || pr.code === 'badaction'));   // an older Portal.gs: just not available
-      if (ownOk && platOk) {
+      if (ownOk) own = (r.sessions || []).filter(x => x && x.status === 'active' && x.code).map(x => ({ code: String(x.code), title: x.sessionTitle || '', group: '' }));
+      if (platOk) plat = ((pr && pr.ok && pr.live) || []).filter(x => x && x.code).map(x => ({ code: String(x.code), title: x.title || '', group: x.group || '' }));
+      fails = ownOk || platOk ? 0 : fails + 1;
+      if (ownOk || platOk) {
         const items = [];
-        (r.sessions || []).filter(x => x && x.status === 'active' && x.code).forEach(x => items.push({ code: String(x.code), title: x.sessionTitle || '', group: '' }));
-        ((pr && pr.ok && pr.live) || []).forEach(x => { if (x && x.code && !items.some(y => y.code === String(x.code))) items.push({ code: String(x.code), title: x.title || '', group: x.group || '' }); });
-        cur = items.length ? { items: items.slice(0, 4) } : null;   // closed by the teacher → gone
-      } else if (cur) cur.stale = true;   // no answer / signed out: keep showing the last code — it is still open on the server
-    } catch (e) { if (cur) cur.stale = true; }
+        (own || []).concat(plat || []).forEach(x => { if (!items.some(y => y.code === x.code)) items.push(x); });
+        cur = items.length ? { items: items.slice(0, 4), stale: !(ownOk && platOk) } : null;   // closed by the teacher → gone
+      } else if (cur && !cur.offline) cur.stale = true;   // no answer at all: keep showing the last code — it is still open on the server
+      window.__presAttendance.last = { at: Date.now(), own: r && (r.ok ? 'ok' : (r.code || r.error || 'error')), platform: pr ? (pr.ok ? 'ok' : (pr.code || pr.error || 'error')) : 'no answer' };
+    } catch (e) { fails++; if (cur && !cur.offline) cur.stale = true; }
     finally { busy = false; }
+    // until the server has answered once, check again soon (3 s) instead of waiting for the next 8-second check
+    if (own === null && plat === null && can() && !quick) quick = setTimeout(() => { quick = null; poll(); }, 3000);
     paint();
   }
   function start() { paint(); if (timer) return; poll(); timer = setInterval(poll, POLL_MS); }
