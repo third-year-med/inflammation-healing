@@ -4574,7 +4574,13 @@ function pickImageDialog(title) {
             if (Backend.isConfigured()) {
               msg.className = 'msg info'; msg.textContent = 'Uploading to Google Drive…';
               const r = await Backend.uploadImage(dataUrl, (file.files[0] && file.files[0].name) || 'image.jpg');
-              if (r && r.ok && r.url) finalUrl = r.url;
+              if (r && r.ok && r.url) {
+                finalUrl = r.url;
+                msg.textContent = 'Uploaded — checking that Google shows the picture…';
+                const chk = await testImageUrl(r.url, 12000);
+                if (chk.ok) finalUrl = chk.url;
+                else toast('The picture is saved in Google Drive, but Google is not showing it yet. It usually appears within a minute — if it still shows “Image could not be loaded”, open the picture’s Drive folder and check that the file is shared as “Anyone with the link”.', 'warn', 12000);
+              }
               else { // never store the picture itself (base64) in the content: it makes items too large to save
                 msg.className = 'msg bad'; msg.textContent = 'Save failed — the picture could not be uploaded, so it was not added. ' + describeUploadError(r && r.error).replace(/^Upload failed — stored locally instead: /, '') + ' You can paste an image address instead.';
                 return false;
@@ -4583,7 +4589,11 @@ function pickImageDialog(title) {
           } else if (url.value.trim()) {
             const u = typeof pracNormImageUrl === 'function' ? pracNormImageUrl(url.value) : url.value.trim();
             if (!isSafeUrl(u) || /^data:/i.test(u) || /\s/.test(u)) { msg.className = 'msg bad'; msg.textContent = 'Invalid URL — please enter a valid http(s) image address.'; return false; }
-            finalUrl = u;
+            const link = normalizeImageLink(u);
+            msg.className = 'msg info'; msg.textContent = 'Checking the picture…';
+            const chk = await testImageUrl(link, 15000);
+            if (!chk.ok) { msg.className = 'msg bad'; msg.textContent = 'This link does not open as a picture, or the website does not allow its pictures to be shown on other sites. Use the picture’s own address (right-click the picture → “Copy image address” — it usually ends in .jpg, .png or .webp), or save the picture to your computer and choose it as a file above.'; return false; }
+            finalUrl = chk.url;
           }
           if (!finalUrl) { msg.className = 'msg bad'; msg.textContent = 'Choose a file or paste an image URL.'; return false; }
           done = true; resolve({ url: finalUrl, caption: cap.value.trim(), credit: cred.value.trim() }); close(true); return true;
@@ -6007,6 +6017,43 @@ function resolveImgUrl(u) {
   if (typeof u === 'string' && u.startsWith('fig:')) { const f = FIGURES[u.slice(4)]; return f ? svgDataUri(f.svg) : ''; }
   return u;
 }
+/* Picture loading (2026-10-14). A picture that fails is retried before the page gives up: first without telling the other
+   site which page asks (many sites and Google refuse pictures requested from another website), then — for a Google Drive
+   file — through Google's other picture addresses for the same file. Only when all fail does the page show its notice. */
+function driveFileId(u) {
+  const s = String(u || '');
+  const m = /^https:\/\/(?:drive|docs)\.google\.com\/(?:thumbnail|uc|open)\?(?:[^#]*&)?id=([\w-]{10,})/.exec(s) || /^https:\/\/(?:drive|docs)\.google\.com\/file\/d\/([\w-]{10,})/.exec(s) || /^https:\/\/lh3\.googleusercontent\.com\/d\/([\w-]{10,})/.exec(s);
+  return m ? m[1] : '';
+}
+function imgAlternatives(u) {
+  const id = driveFileId(u); if (!id) return [];
+  return ['https://lh3.googleusercontent.com/d/' + id + '=w2000', 'https://drive.google.com/thumbnail?id=' + id + '&sz=w2000', 'https://drive.google.com/uc?export=view&id=' + id].filter(x => x !== u);
+}
+/** A pasted link → a picture address: Google Drive "share" links and Dropbox links become direct picture links. */
+function normalizeImageLink(u) {
+  const s = String(u || '').trim(), id = driveFileId(s);
+  if (id && !/\/thumbnail\?/.test(s)) return 'https://drive.google.com/thumbnail?id=' + id + '&sz=w2000';
+  if (/^https:\/\/(www\.)?dropbox\.com\//i.test(s)) return s.replace(/([?&])dl=0\b/, '$1raw=1') + (/[?&](raw|dl)=1\b/.test(s) ? '' : (s.indexOf('?') >= 0 ? '&' : '?') + 'raw=1');
+  return s;
+}
+/** Loads a picture (and its alternatives) once; resolves with the first address that shows, or ok:false. */
+function testImageUrl(u, timeoutMs) {
+  const list = [u].concat(imgAlternatives(u));
+  const one = src => new Promise(ok => { const i = new Image(); let t = setTimeout(() => { t = 0; ok(false); }, timeoutMs || 15000); i.referrerPolicy = 'no-referrer';
+    i.onload = () => { if (t) { clearTimeout(t); ok(i.naturalWidth > 0); } }; i.onerror = () => { if (t) { clearTimeout(t); ok(false); } }; i.src = src; });
+  return (async () => { for (const src of list) if (await one(src)) return { ok: true, url: src }; return { ok: false }; })();
+}
+document.addEventListener('error', e => {
+  const img = e.target; if (!img || img.tagName !== 'IMG') return;
+  const orig = img.dataset.imgOrig || img.getAttribute('src') || ''; if (!/^https?:/i.test(orig)) return;
+  if (!img.dataset.imgOrig) img.dataset.imgOrig = orig;
+  const tried = Number(img.dataset.imgTry || 0), list = [orig].concat(imgAlternatives(orig));
+  if (tried >= list.length) return;                  // every way failed → the page shows its notice
+  img.dataset.imgTry = String(tried + 1);
+  e.stopImmediatePropagation();                      // not broken yet: try again
+  img.referrerPolicy = 'no-referrer';
+  img.src = list[tried];
+}, true);
 /** Shared image renderer (slides, question cards, live activities). allowFloat only on content/question slides. */
 /* Presentation emphasis (2026-10-13): the course data may carry slide-only copies of each section's key points
    (section.slideKeyPoints) and each topic's must-know items (topic.slideMustKnow) with **bold** on the key words — the same
@@ -6041,7 +6088,7 @@ function buildSlideImages(images, allowFloat) {
       broken = true;
       fig.classList.add('img-broken');
       fig.title = 'Image unavailable';
-      img.replaceWith(el('div', { class: 'small muted', style: 'padding:.5rem;border:1px dashed var(--line);border-radius:8px' }, '⚠ Image unavailable offline'));
+      img.replaceWith(el('div', { class: 'small muted', style: 'padding:.5rem;border:1px dashed var(--line);border-radius:8px' }, '⚠ Image could not be loaded', /^https?:/i.test(im.url) ? el('div', null, el('a', { href: im.url, target: '_blank', rel: 'noopener noreferrer', onclick: ev => ev.stopPropagation() }, 'open the picture ↗')) : null));
     };
     if (broken) setBroken(); else { fig.title = 'Tap or click to enlarge'; img.addEventListener('error', setBroken); }
     // The click handler lives on the <figure> (not the <img>) so the caption remains clickable too — but that
