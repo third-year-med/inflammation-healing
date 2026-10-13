@@ -16920,6 +16920,7 @@ function pmSectionRefs(s) {
   (s.links || []).forEach(l => { if (l && l.url) links.push(pmLinkRef(s.id, l)); });
   return { imgs, links };
 }
+function pmRefKey(r) { return r ? [r.t || '', r.sid || '', r.id || '', r.url || '', r.i == null ? '' : r.i].join('|') : ''; }
 function pmChunk(a, n) { const out = []; for (let i = 0; i < a.length; i += n) out.push(a.slice(i, i + n)); return out; }
 /** Pages: images in groups of 4; the links join the last image page when they are few, otherwise get pages of their own. */
 function pmPages(refs) {
@@ -16951,7 +16952,7 @@ const _pmCache = { base: null, sig: '', out: null };
 function pmSig(base) {
   let m = ''; try { m = Object.keys(State.customMedia || {}).map(k => k + ':' + (State.customMedia[k] || []).length).join(','); } catch (e) { }
   const pp = (State.practicalPub || []).map(p => p.id + ':' + (p.images || []).length).join(',');
-  const off = (State.deck && State.deck.pmOff || []).length;
+  const off = (State.deck && State.deck.pmOff || []).length + '/' + (State.deck && State.deck.pmOffItems || []).length;
   return [base.length, (DATA.images || []).length, m, pp, off, getTopics().map(t => t.id + (t.sections || []).map(x => (x.figures || []).length + '.' + (x.links || []).length + '.' + (x.hideImages || []).join(',')).join(':')).join('')].join('|');
 }
 /** Insert the Images slides that are missing (idempotent: slides already present — or deleted by the teacher — are left alone). */
@@ -16962,7 +16963,28 @@ function pmAugment(base) {
   const out = base.slice(), have = new Set(out.map(x => x.id)), off = new Set((State.deck && State.deck.pmOff) || []);
   const after = (idx, sl) => { out.splice(idx + 1, 0, sl); have.add(sl.id); };
   const lastIndexOf = pred => { for (let i = out.length - 1; i >= 0; i--) if (pred(out[i])) return i; return -1; };
+  const offItems = new Set((State.deck && State.deck.pmOffItems) || []);
   getTopics().forEach(t => (t.sections || []).forEach(s => {
+    /* 2026-10-14: a section whose Images slides were saved with the deck keeps them, but a picture or link added in Learn
+       mode afterwards is added to its last Images slide (a new Images slide follows when it is full). A picture the teacher
+       removed from an Images slide (Edit slides) is remembered in deck.pmOffItems and is not added again. */
+    const isMine = x => x && x.type === 'gallery' && x.sectionId === s.id && !x.pracId;
+    if (out.some(isMine)) {
+      const known = new Set(); out.forEach(x => { if (isMine(x)) (x.items || []).forEach(r => known.add(pmRefKey(r))); });
+      const fresh = r => r && r.t === 'media' && !known.has(pmRefKey(r)) && !offItems.has(s.id + '|' + pmRefKey(r));
+      const refs = pmSectionRefs(s), imgs = refs.imgs.filter(fresh), links = refs.links.filter(fresh);
+      if (!imgs.length && !links.length) return;
+      let li = lastIndexOf(isMine); const last = out[li];
+      const nImg = (last.items || []).map(r => pmResolve(r, s.id)).filter(o => o && ['fig', 'atlas', 'media', 'prac'].indexOf(o.kind) >= 0).length + (last.images || []).filter(im => im && im.url).length;
+      const room = Math.max(0, PM_PER_IMG - nImg), addImgs = imgs.slice(0, room), restImgs = imgs.slice(room);
+      const linksHere = !restImgs.length && links.length <= PM_LINKS_WITH_IMGS;
+      if (addImgs.length || linksHere) out[li] = Object.assign({}, last, { items: (last.items || []).concat(addImgs, linksHere ? links : []) });
+      pmPages({ imgs: restImgs, links: linksHere ? [] : links }).forEach(pg => {
+        let k = 0; while (have.has('g_' + s.id + '_' + k) || off.has('g_' + s.id + '_' + k)) k++;
+        after(li++, { id: 'g_' + s.id + '_' + k, type: 'gallery', topicId: t.id, sectionId: s.id, kicker: last.kicker || (t.title + ' · Images'), title: s.heading, items: pg.imgs.concat(pg.links), textScale: last.textScale || 3, auto: 1 });
+      });
+      return;
+    }
     pmGallerySlides(t, s).forEach(g => {
       if (have.has(g.id) || off.has(g.id)) return;
       const i = lastIndexOf(x => x.id === 'c_' + s.id || (x.type === 'gallery' && x.sectionId === s.id));
@@ -17310,7 +17332,10 @@ const PE = {
     const P = Views.present; const sel = this.sel; if (!sel) return;
     const s = P.cur(); if (!s || s.id !== sel.slideId) { this.clear(); return; }
     const n = sel.node; let op = null;
-    if (n.dataset.item != null) { const i = +n.dataset.item; op = x => { x.items = (x.items || []).filter((_, k) => k !== i); }; }
+    if (n.dataset.item != null) { const i = +n.dataset.item; op = x => {
+      const r = (x.items || [])[i];   // remembered, so a Learn picture removed here is not added back automatically
+      if (r && x.type === 'gallery' && x.sectionId && State.deck) State.deck.pmOffItems = [...new Set((State.deck.pmOffItems || []).concat(x.sectionId + '|' + pmRefKey(r)))];
+      x.items = (x.items || []).filter((_, k) => k !== i); }; }
     else if (n.dataset.qurl) { const u = n.dataset.qurl; op = x => { x.hideLinks = [...new Set((x.hideLinks || []).concat(u))]; }; }
     else {
       const img = n.querySelector('img'); const src = img && img.getAttribute('src');
