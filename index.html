@@ -4876,7 +4876,7 @@ Views.explain = {
     (s.figures || []).forEach(fid => { const f = renderFigure(fid); if (f) body.appendChild(f); });
     const media = sectionMedia(s.id);
     if (media.length) {
-      body.appendChild(el('h4', { style: 'margin:1rem 0 0;color:var(--navy-2)' }, '🖼️ Added by your teacher'));
+      body.appendChild(el('h4', { style: 'margin:1rem 0 0;color:var(--navy-2)' }, '🖼️ Images'));
       body.appendChild(el('div', { class: 'media-grid' }, media.map(m => renderMediaItem(m, this.editMode ? (item) => removeMedia(s.id, item) : null))));
     }
     const lk = renderLinks(s.links); if (lk) body.appendChild(lk);
@@ -16924,7 +16924,9 @@ function pmRefKey(r) { return r ? [r.t || '', r.sid || '', r.id || '', r.url || 
 function pmChunk(a, n) { const out = []; for (let i = 0; i < a.length; i += n) out.push(a.slice(i, i + n)); return out; }
 /** Pages: images in groups of 4; the links join the last image page when they are few, otherwise get pages of their own. */
 function pmPages(refs) {
-  const pages = pmChunk(refs.imgs, PM_PER_IMG).map(im => ({ imgs: im, links: [] }));
+  // 2026-10-14: one picture per slide for the teacher's own pictures; course schematics / library images keep up to PM_PER_IMG
+  const own = refs.imgs.filter(r => r && r.t === 'media'), course = refs.imgs.filter(r => !(r && r.t === 'media'));
+  const pages = pmChunk(course, PM_PER_IMG).map(im => ({ imgs: im, links: [] })).concat(own.map(r => ({ imgs: [r], links: [] })));
   let links = refs.links.slice();
   if (pages.length && links.length && links.length <= PM_LINKS_WITH_IMGS && pages[pages.length - 1].imgs.length <= 3) { pages[pages.length - 1].links = links; links = []; }
   pmChunk(links, PM_PER_LINK).forEach(l => pages.push({ imgs: [], links: l }));
@@ -16938,7 +16940,7 @@ function pmPracSlides() {
   const pt = pmPracticalTopic(); if (!pt) return [];
   return (State.practicalPub || []).filter(p => p && p.id && (p.images || []).some(im => im && im.url)).map(p => {
     const imgs = (p.images || []).filter(im => im && im.url).map((im, i) => ({ t: 'prac', id: p.id, i }));
-    return pmChunk(imgs, PM_PER_IMG).map((part, k, all) => ({ id: 'gp_' + p.id + '_' + k, type: 'gallery', topicId: pt.id, pracId: p.id, kicker: pt.title + ' · Practical ' + (p.number || ''), title: (p.title || p.diagnosis || 'Practical') + (all.length > 1 ? ' (' + (k + 1) + '/' + all.length + ')' : ''), items: part, textScale: 3, auto: 1 }));
+    return pmChunk(imgs, 1).map((part, k, all) => ({ id: 'gp_' + p.id + '_' + k, type: 'gallery', topicId: pt.id, pracId: p.id, kicker: pt.title + ' · Practical ' + (p.number || ''), title: (p.title || p.diagnosis || 'Practical') + (all.length > 1 ? ' (' + (k + 1) + '/' + all.length + ')' : ''), items: part, textScale: 3, auto: 1 }));
   }).flat();
 }
 /** Section of the practical topic that teaches this practical (same diagnosis words), else null. */
@@ -16975,8 +16977,7 @@ function pmAugment(base) {
       const refs = pmSectionRefs(s), imgs = refs.imgs.filter(fresh), links = refs.links.filter(fresh);
       if (!imgs.length && !links.length) return;
       let li = lastIndexOf(isMine); const last = out[li];
-      const nImg = (last.items || []).map(r => pmResolve(r, s.id)).filter(o => o && ['fig', 'atlas', 'media', 'prac'].indexOf(o.kind) >= 0).length + (last.images || []).filter(im => im && im.url).length;
-      const room = Math.max(0, PM_PER_IMG - nImg), addImgs = imgs.slice(0, room), restImgs = imgs.slice(room);
+      const addImgs = [], restImgs = imgs;   // one picture per slide: each new picture gets its own Images slide
       const linksHere = !restImgs.length && links.length <= PM_LINKS_WITH_IMGS;
       if (addImgs.length || linksHere) out[li] = Object.assign({}, last, { items: (last.items || []).concat(addImgs, linksHere ? links : []) });
       pmPages({ imgs: restImgs, links: linksHere ? [] : links }).forEach(pg => {
@@ -17053,7 +17054,7 @@ function pmFigure(o, hide) {
     if (o.kind === 'prac') stImg(img, url); else img.src = resolveImgUrl(url);
     box.appendChild(img);
     cap = o.kind === 'media' ? (o.m.caption || '') : (o.im.caption || o.p.diagnosis || o.p.title || '');
-    meta = o.kind === 'media' ? 'Teacher’s image' : 'Practical ' + (o.p.number || '') + (o.im.slot ? ' · ' + o.im.slot : '');
+    meta = o.kind === 'media' ? '' : 'Practical ' + (o.p.number || '') + (o.im.slot ? ' · ' + o.im.slot : '');
     const cr = o.kind === 'media' ? o.m.credit : (o.im.credit || o.im.source || '');
     credit = cr ? el('span', null, cr) : null;
     lb = () => openLightbox({ src: img.currentSrc || img.src, caption: hide ? '' : cap, credit: cr || '' });
@@ -17062,7 +17063,7 @@ function pmFigure(o, hide) {
   box.setAttribute('aria-label', 'Enlarge image' + (hide ? '' : cap ? ': ' + cap : ''));
   box.addEventListener('click', e => { e.stopPropagation(); if (lb) lb(); });
   return el('figure', { class: 'gal-fig' }, box,
-    el('figcaption', null, el('span', { class: 'gal-meta' }, meta), hide ? el('b', { class: 'gal-dx gal-hidden' }, '?  —  press R to reveal') : (cap ? el('b', { class: 'gal-dx' }, cap) : null), credit ? el('span', { class: 'gal-credit' }, credit) : null));
+    el('figcaption', null, meta ? el('span', { class: 'gal-meta' }, meta) : null, hide ? el('b', { class: 'gal-dx gal-hidden' }, '?  —  press R to reveal') : (cap ? el('b', { class: 'gal-dx' }, cap) : null), credit ? el('span', { class: 'gal-credit' }, credit) : null));
 }
 /** Renders a gallery slide into the existing slide frame (kicker + h2 already follow the house style). */
 function pmRenderGallery(slide, s, kicker, P) {
@@ -17345,7 +17346,7 @@ const PE = {
     if (!op) { toast('This element comes from the course content — delete it in the Learning Module (Edit Mode) instead.', 'warn', 6000); return; }
     if (!(await confirmDialog('Delete this ' + sel.kind + ' from this slide? Only the slide changes — the Learning Module and the shared image library keep it.', { title: 'Delete from slide?', danger: true, okLabel: 'Delete' }))) return;
     this.clear();
-    await P.mutate(sl => { const x = sl.find(y => y.id === s.id); if (x) op(x); }, 'delete ' + sel.kind + ' from slide');
+    await P.mutate(sl => { const x = sl.find(y => y.id === s.id); if (x) { op(x); if (typeof peDropEmptyGallery === 'function') peDropEmptyGallery(sl, x); } }, 'delete ' + sel.kind + ' from slide');
     toast('Deleted from this slide.', 'ok');
   }
 };
@@ -17384,6 +17385,284 @@ const PE = {
   }, true);
 })();
 
+
+/* ==========================================================================
+   Slide editor — Cut / Copy / Paste / Insert pictures (2026-10-14)
+   In Edit slides, click a picture to select it (as before), then:
+     ✂ Cut · ⧉ Copy (toolbar or Ctrl/⌘+X, Ctrl/⌘+C) → go to another slide → 📋 Paste (Ctrl/⌘+V).
+     A cut picture stays where it is until it is pasted; the move is then ONE deck save (added there and
+     removed here together), so it can never be lost in between. Copies reuse the same stored address
+     (nothing is uploaded twice); the copy's caption can then be edited on its own.
+   Pictures from the computer: Ctrl/⌘+V of a copied picture, 🖼 Insert pictures (several at once) or drag
+   and drop onto the slide. Each is checked (JPEG/PNG/WebP/GIF, size), uploaded to Google Drive like every
+   other picture, and gets its own slide (one picture per slide, caption underneath).
+   The selected picture's caption, size and position are edited directly in its toolbar.
+   ========================================================================== */
+const PEClip = { item: null };
+/** An Images slide left with nothing on it is removed in the same save (and, like any removed Images slide, not rebuilt). */
+function peDropEmptyGallery(sl, x) {
+  if (!x || (x.images || []).some(im => im && im.url)) return;
+  const emptyGallery = x.type === 'gallery' && !(x.items || []).length;
+  const emptyPictureSlide = x.type === 'content' && /^img_/.test(String(x.id)) && !(x.bullets || []).length && !x.text;   // a picture slide made by Insert / Paste
+  if (!emptyGallery && !emptyPictureSlide) return;
+  const i = sl.indexOf(x); if (i >= 0) sl.splice(i, 1);
+}
+(function () {
+  const P = Views.present; if (!P || typeof PE === 'undefined') return;
+  const MARK = 'pathology-platform:picture';
+  const IMG_OK = /^image\/(jpeg|png|webp|gif)$/i, MAX = 15 * 1024 * 1024, GIF_MAX = 5 * 1024 * 1024;
+  const editing = () => Router.current === 'present' && !!P.edit && !document.querySelector('.modal-back');
+  const typing = t => !!(t && t.closest && t.closest('input,textarea,select,[contenteditable="true"],[contenteditable=""]'));
+  const clip = () => PEClip.item || Store.sget('pe_clip_v1', null);
+  const setClip = v => { PEClip.item = v; if (v) Store.sset('pe_clip_v1', v); else Store.sdel('pe_clip_v1'); };
+  const st = document.createElement('style');
+  st.textContent = '.pres-stage .pe-cut{opacity:.45;outline:3px dashed var(--teal);outline-offset:3px}' +
+    '.pres-stage-outer.pe-drop::after{content:"Drop pictures here — each gets its own slide";position:absolute;inset:8px;z-index:640;display:grid;place-items:center;border:3px dashed var(--teal);border-radius:14px;background:rgba(15,118,110,.08);color:var(--navy);font-weight:800;font-size:1.1rem;pointer-events:none}' +
+    '.pe-bar .pe-cap{min-width:14rem;max-width:28rem;flex:1 1 16rem;padding:.3rem .5rem;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:.85rem}' +
+    '.pe-bar select{flex:0 0 auto;width:auto;font-size:.8rem;padding:.2rem .3rem;border-radius:8px;border:1px solid var(--line)}' +
+    '.pe-bar .pe-caprow{display:flex;gap:.35rem;flex:1 1 100%;align-items:center}' +
+    '.pe-status{font-size:.8rem;font-weight:700;color:var(--teal)}' +
+    '.slide .gal.gal-n1 .gal-fig figcaption,.slide .slide-imgs .slide-img.size-xl figcaption,.slide .slide-imgs .slide-img.size-full figcaption{text-align:center}' +
+    /* a picture slide (one picture, no text): the picture keeps its proportions and leaves room for the title and its caption */
+    '.pres-stage .slide.pic-slide .slide-imgs .slide-img{display:flex;flex-direction:column;align-items:center;max-width:100%}' +
+    '.pres-stage .slide.pic-slide .slide-imgs .slide-img img{width:100%;height:auto;max-height:60cqh;object-fit:contain;box-shadow:none;background:transparent}' +
+    '.pres-stage .slide.pic-slide .slide-imgs .slide-img figcaption{text-align:center;max-width:62em}';
+  document.head.appendChild(st);
+
+  /** The selected element as a slide picture, plus where it lives (null for links/videos). */
+  function describe(sel) {
+    const s = P.cur(); if (!sel || !s || s.id !== sel.slideId || !sel.node) return null;
+    const n = sel.node;
+    if (n.classList.contains('gal-chip')) return null;
+    if (n.dataset.item != null) {
+      const i = +n.dataset.item, r = (s.items || [])[i]; if (!r) return null;
+      const o = pmResolve(r, s.sectionId); if (!o) return null;
+      let im = null;
+      if (o.kind === 'media') im = { url: o.m.url, caption: o.m.caption || '', credit: o.m.credit || '' };
+      else if (o.kind === 'prac') im = { url: o.im.url, caption: o.im.caption || o.p.diagnosis || o.p.title || '', credit: o.im.credit || o.im.source || '' };
+      else if (o.kind === 'atlas') im = { url: o.x.src, caption: o.x.dx || '', credit: o.x.credit ? 'Image: ' + o.x.credit : '' };
+      else if (o.kind === 'fig') im = { url: 'fig:' + o.id, caption: (o.f && o.f.title) || '' };
+      if (!im || !im.url) return null;
+      return { im, slideId: s.id, kind: 'item', refKey: pmRefKey(r), o, sectionId: s.sectionId };
+    }
+    const img = n.querySelector('img'); const src = img && (img.dataset.imgOrig || img.getAttribute('src'));
+    const i = (s.images || []).findIndex(im => im && im.url && (resolveImgUrl(im.url) === src || im.url === src));
+    if (i < 0) return null;
+    return { im: Object.assign({}, s.images[i]), slideId: s.id, kind: 'image', url: s.images[i].url, i };
+  }
+  function locate(x, d) {
+    if (d.kind === 'item') return (x.items || []).findIndex(r => pmRefKey(r) === d.refKey);
+    return (x.images || []).findIndex(im => im && im.url === d.url);
+  }
+  function takeOff(x, d) {
+    const i = locate(x, d); if (i < 0) return false;
+    if (d.kind === 'item') {
+      const r = x.items[i];   // remembered, so a Learn picture moved away is not added back to this Images slide
+      if (r && x.type === 'gallery' && x.sectionId && State.deck) State.deck.pmOffItems = [...new Set((State.deck.pmOffItems || []).concat(x.sectionId + '|' + pmRefKey(r)))];
+      x.items = x.items.filter((_, k) => k !== i);
+    } else x.images = x.images.filter((_, k) => k !== i);
+    return true;
+  }
+
+  function copy(cut) {
+    const d = describe(PE.sel);
+    if (!d) { toast('Select a picture on the slide first — links and videos cannot be copied.', 'warn'); return false; }
+    setClip({ im: { url: d.im.url, caption: d.im.caption || '', credit: d.im.credit || '', size: d.im.size || '', align: d.im.align || '' },
+      cut: cut ? { slideId: d.slideId, kind: d.kind, refKey: d.refKey || '', url: d.url || d.im.url } : null, at: Date.now() });
+    document.querySelectorAll('.pres-stage .pe-cut').forEach(x => x.classList.remove('pe-cut'));
+    if (cut && PE.sel && PE.sel.node) PE.sel.node.classList.add('pe-cut');
+    toast(cut ? 'Cut — open the slide where it belongs and press 📋 Paste (Ctrl+V). It leaves this slide when it is pasted.' : 'Copied — open any slide and press 📋 Paste (Ctrl+V).', 'ok', 5000);
+    renderToolbarBits();
+    return true;
+  }
+
+  // every picture operation (insert, paste, drop, move) runs one after another: a second one started while the first is
+  // still saving waits for it instead of being lost
+  let chain = Promise.resolve();
+  const queued = fn => function () { const a = arguments; const run = () => fn.apply(null, a); const r = chain.then(run, run); chain = r.catch(() => { }); return r; };
+  /** Puts pictures on the deck: one picture per slide. A single picture pasted on a text slide without a picture
+   *  goes onto that slide; otherwise each picture gets a new slide after the current one. `cut` (optional) is
+   *  removed from its slide in the SAME save. */
+  async function place(list, cut, opts) {
+    if (!list.length) return false;
+    {
+      const s = P.cur(); if (!s) return false;
+      const ids = [];
+      await P.mutate(sl => {
+        let at = sl.findIndex(y => y.id === s.id); if (at < 0) at = sl.length - 1;
+        const tgt = sl[at];
+        list.forEach((im, k) => {
+          const base = { url: im.url, caption: im.caption || '', credit: im.credit || '' };
+          const textSlide = tgt && tgt.type === 'content' && ((tgt.bullets || []).length || tgt.text);
+          if (k === 0 && list.length === 1 && !(opts && opts.newSlide) && tgt && tgt.type === 'content' && !(tgt.images || []).length) {
+            tgt.images = [Object.assign(base, textSlide ? { size: im.size && im.size !== 'full' ? im.size : 'm', align: im.align === 'left' ? 'left' : 'right' } : { size: im.size || 'xl', align: 'center' })];
+            ids.push(tgt.id); return;
+          }
+          const ns = { id: 'img_' + Date.now().toString(36) + k + Math.random().toString(36).slice(2, 6), type: 'content', topicId: (tgt && tgt.topicId) || '', title: (tgt && tgt.title) || '', bullets: [],
+            images: [Object.assign(base, { size: im.size && ['l', 'xl', 'full'].indexOf(im.size) >= 0 ? im.size : 'xl', align: 'center' })] };
+          sl.splice(++at, 0, ns); ids.push(ns.id);
+        });
+        if (cut) { const src = sl.find(y => y.id === cut.slideId); if (src && takeOff(src, cut)) peDropEmptyGallery(sl, src); }
+      }, cut ? 'move picture' : list.length > 1 ? 'insert pictures' : 'insert picture');
+      const ni = P.list().findIndex(x => x.id === ids[ids.length - 1]); if (ni >= 0 && ni !== P.idx) P.go(ni);
+      return true;
+    }
+  }
+  const pasteClip = queued(async function () {
+    const c = clip();
+    if (!c) { toast('Nothing to paste yet — select a picture and ✂ Cut or ⧉ Copy it, or copy a picture on your computer.', 'info', 6000); return; }
+    const s = P.cur(); if (!s) return;
+    if (c.cut && c.cut.slideId === s.id) { toast('The cut picture is already on this slide — open another slide to paste it.', 'info'); return; }
+    if (await place([Object.assign({}, c.im)], c.cut)) {
+      if (c.cut) setClip(null);
+      toast(c.cut ? 'Picture moved.' : 'Picture pasted.', 'ok');
+      renderToolbarBits();
+    }
+  });
+
+  function status(t) { const s = P.els.edit && P.els.edit.querySelector('.pe-status'); if (s) s.textContent = t || ''; }
+  function loads(src) { return new Promise(ok => { const i = new Image(); i.onload = () => ok(i.naturalWidth > 0); i.onerror = () => ok(false); i.src = src; }); }
+  /** Pictures from the computer → checked, uploaded to the platform's Drive folder → one slide each. */
+  const uploadFiles = queued(async function (files, opts) {
+    const all = [...files].filter(Boolean); if (!all.length) return;
+    const notes = [];
+    const ok = all.filter(f => { if (!IMG_OK.test(f.type || '')) { notes.push(f.name + ': not a JPEG, PNG, WebP or GIF picture'); return false; }
+      if (f.size > (/gif$/i.test(f.type) ? GIF_MAX : MAX)) { notes.push(f.name + ': too large (' + (f.size / 1048576).toFixed(1) + ' MB; limit ' + (/gif$/i.test(f.type) ? 5 : 15) + ' MB)'); return false; } return true; });
+    const out = [];
+    for (let k = 0; k < ok.length; k++) {
+      const f = ok[k]; status('Uploading picture ' + (k + 1) + ' of ' + ok.length + '…');
+      let dataUrl = null;
+      try { dataUrl = await resizeImageFile(f, 1600, 0.85); if (!(await loads(dataUrl))) dataUrl = null; } catch (e) { dataUrl = null; }
+      if (!dataUrl) { notes.push(f.name + ': could not be read (damaged or unsupported)'); continue; }
+      if (!Backend.isConfigured()) { out.push({ url: dataUrl, caption: '' }); continue; }
+      const r = await Backend.uploadImage(dataUrl, f.name || 'image.jpg');
+      if (!(r && r.ok && r.url)) { notes.push(f.name + ': ' + describeUploadError(r && r.error).replace(/^Upload failed — stored locally instead: /, 'upload failed — ')); continue; }
+      const chk = await testImageUrl(r.url, 12000);
+      out.push({ url: chk.ok ? chk.url : r.url, caption: '' });
+    }
+    status('');
+    if (out.length && await place(out, null, opts)) toast(out.length === 1 ? 'Picture added — type its caption in the box above the slide.' : out.length + ' pictures added, one per slide — click each picture to type its caption.', 'ok', 6000);
+    if (notes.length) toast('Not added: ' + notes.join(' · '), 'warn', 12000);
+    if (out.length === 1) setTimeout(selectFirstPicture, 300);
+  });
+  const pasteLink = queued(async function (u) {
+    const link = normalizeImageLink(u); status('Checking the picture…');
+    const chk = await testImageUrl(link, 15000); status('');
+    if (!chk.ok) { toast('This link does not open as a picture (or the website blocks showing it elsewhere). Copy the picture itself, or save it and use 🖼 Insert pictures.', 'warn', 9000); return; }
+    if (await place([{ url: chk.url, caption: '' }])) toast('Picture added.', 'ok');
+  });
+  function selectFirstPicture() { const n = P.els.stage && P.els.stage.querySelector('.slide .slide-img'); if (n && P.edit) { PE.select(n); const c = P.els.outer.querySelector('.pe-bar .pe-cap'); if (c) c.focus(); } }
+
+  // ---- the selection toolbar: Cut, Copy, caption, size, position (before Delete) ----
+  const sel0 = PE.select;
+  PE.select = function (node) {
+    const r = sel0.apply(this, arguments);
+    const bar = P.els.outer && P.els.outer.querySelector('.pe-bar'); const d = describe(this.sel); if (!bar || !d) return r;
+    const del = bar.querySelector('.btn-danger');
+    const b = (t, f, title) => el('button', { type: 'button', class: 'btn btn-sm', title: title || '', onclick: f }, t);
+    const add = n => bar.insertBefore(n, del);
+    add(b('✂ Cut', () => copy(true), 'Cut (Ctrl+X) — moves the picture to the slide where you paste it'));
+    add(b('⧉ Copy', () => copy(false), 'Copy (Ctrl+C)'));
+    const editable = d.kind === 'image' || (d.o && d.o.kind === 'media');
+    if (editable) {
+      const cap = el('input', { type: 'text', class: 'pe-cap', value: d.im.caption || '', placeholder: 'Caption under the picture…', 'aria-label': 'Caption' });
+      const save = b('✓ Save caption', () => saveCaption(d, cap.value), d.kind === 'item' ? 'Also changes the caption in Learn mode (same picture)' : '');
+      cap.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveCaption(d, cap.value); } e.stopPropagation(); });
+      bar.appendChild(el('div', { class: 'pe-caprow' }, cap, save));   // the caption on its own line under the buttons
+    }
+    if (d.kind === 'image') {
+      const s = P.cur(), im = (s.images || [])[d.i] || {};
+      const size = el('select', { 'aria-label': 'Size' }, [['s', 'Small'], ['m', 'Medium'], ['l', 'Large'], ['xl', 'Extra large'], ['full', 'Full width']].map(([v, t]) => el('option', { value: v, selected: (im.size || 'm') === v }, t)));
+      const pos = el('select', { 'aria-label': 'Position' }, [['left', 'Left'], ['center', 'Centre'], ['right', 'Right']].map(([v, t]) => el('option', { value: v, selected: (im.align || 'center') === v }, t)));
+      const set = (k, v) => P.mutate(sl => { const x = sl.find(y => y.id === d.slideId); const i = x ? locate(x, d) : -1; if (i >= 0) x.images[i] = Object.assign({}, x.images[i], { [k]: v }); }, 'picture ' + k);
+      size.addEventListener('change', () => set('size', size.value)); pos.addEventListener('change', () => set('align', pos.value));
+      add(size); add(pos);
+    }
+    return r;
+  };
+  async function saveCaption(d, text) {
+    const v = String(text || '').trim().slice(0, 600);
+    if (d.kind === 'image') {
+      await P.mutate(sl => { const x = sl.find(y => y.id === d.slideId); const i = x ? locate(x, d) : -1; if (i >= 0) x.images[i] = Object.assign({}, x.images[i], { caption: v }); }, 'caption');
+    } else if (d.o && d.o.kind === 'media') {   // the Learn picture itself: one caption for Learn mode and its Images slide
+      const sid = d.o.m && d.sectionId; const items = (State.customMedia[sid] || []).map(m => (m.id || m.url) === (d.o.m.id || d.o.m.url) ? Object.assign({}, m, { caption: v }) : m);
+      await saveDoc('custommedia', sid, { items }, { label: 'Caption from Presentation Mode' });
+      P.render();
+    }
+    toast('Caption saved.', 'ok');
+  }
+
+  // ---- toolbar: 🖼 Insert pictures · 📋 Paste ----
+  const file = el('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp,image/gif', multiple: true, class: 'hidden' });
+  file.addEventListener('change', () => { const f = [...file.files]; file.value = ''; uploadFiles(f, { newSlide: true }); });
+  document.body.appendChild(file);
+  function renderToolbarBits() {
+    const box = P.els.edit; if (!box || !P.edit) return;
+    let w = box.querySelector('.pe-tools');
+    if (!w) { w = el('span', { class: 'row pe-tools', style: 'gap:.35rem' }); const hint = box.querySelector('.pe-hint'); box.insertBefore(w, hint || null); }
+    clear(w);
+    const c = clip();
+    w.appendChild(el('button', { type: 'button', class: 'btn btn-sm', title: 'Choose pictures on your computer — each gets its own slide', onclick: () => file.click() }, '🖼 Insert pictures'));
+    w.appendChild(el('button', { type: 'button', class: 'btn btn-sm', disabled: !c, title: c ? (c.cut ? 'Move the cut picture here (Ctrl+V)' : 'Paste the copied picture here (Ctrl+V)') : 'Copy or cut a picture first', onclick: () => pasteClip() }, c && c.cut ? '📋 Paste (move here)' : '📋 Paste'));
+    w.appendChild(el('span', { class: 'pe-status' }));
+    const hint = box.querySelector('.pe-hint'); if (hint) hint.textContent = 'Click a picture to select it: ✂ Cut · ⧉ Copy · 📋 Paste (Ctrl/⌘ + X, C, V) · type its caption · 🗑 Delete. Paste or drop pictures from your computer.';
+  }
+  const re0 = P.renderEdit;
+  P.renderEdit = function () { const r = re0.apply(this, arguments); try { renderToolbarBits(); } catch (e) { /* ignore */ } return r; };
+  // the cut picture stays marked when its slide is shown again
+  const rs0 = P.renderSlide;
+  P.renderSlide = function () {
+    const r = rs0.apply(this, arguments);
+    try { const s = this.cur(), sl = this.els.stage.querySelector('.slide');
+      if (sl && s && s.type === 'content' && (s.images || []).some(im => im && im.url) && !(s.bullets || []).length && !s.text) sl.classList.add('pic-slide'); } catch (e) { /* ignore */ }
+    try { const c = clip(), s = this.cur(); if (this.edit && c && c.cut && s && s.id === c.cut.slideId) this.els.stage.querySelectorAll('.slide-img, .gal-fig').forEach(n => { const save = PE.sel; PE.sel = { node: n, slideId: s.id }; const d = describe(PE.sel); PE.sel = save; if (d && (d.kind === 'item' ? d.refKey === c.cut.refKey : d.url === c.cut.url)) n.classList.add('pe-cut'); }); } catch (e) { /* ignore */ }
+    return r;
+  };
+
+  // ---- keyboard: Ctrl/⌘ + X / C / V (Delete/Backspace and Esc are handled by the selection code) ----
+  let keyAt = 0, pasteAt = 0;
+  document.addEventListener('keydown', e => {
+    if (!editing() || typing(e.target) || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = String(e.key || '').toLowerCase();
+    if ((k === 'c' || k === 'x') && PE.sel) { if (String(window.getSelection ? window.getSelection() : '')) return; keyAt = Date.now(); copy(k === 'x'); }
+    else if (k === 'v') { const t0 = Date.now(); setTimeout(() => { if (pasteAt < t0 && editing()) pasteClip(); }, 250); }   // no paste event (some browsers) → paste the copied slide picture
+  }, true);
+  ['copy', 'cut'].forEach(type => document.addEventListener(type, e => {
+    if (!editing() || !PE.sel || typing(e.target) || String(window.getSelection ? window.getSelection() : '')) return;
+    if (Date.now() - keyAt > 400 && !copy(type === 'cut')) return;   // menu Copy/Cut (no shortcut): copy now
+    try { e.clipboardData.setData('text/plain', MARK); e.preventDefault(); } catch (err) { /* ignore */ }   // so a later paste uses the slide picture, not an old file
+  }, true));
+  document.addEventListener('paste', e => {
+    if (!editing() || typing(e.target)) return;
+    pasteAt = Date.now(); e.preventDefault(); e.stopImmediatePropagation();
+    const dt = e.clipboardData; const text = dt ? String(dt.getData('text/plain') || '').trim() : '';
+    let files = dt ? [...(dt.files || [])].filter(f => /^image\//.test(f.type)) : [];
+    if (!files.length && dt && dt.items) [...dt.items].forEach(it => { if (it.kind === 'file' && /^image\//.test(it.type)) { const f = it.getAsFile(); if (f) files.push(f); } });
+    if (files.length && text !== MARK) uploadFiles(files.slice(0, 20));
+    else if (clip()) pasteClip();
+    else if (/^https?:\/\/\S+$/i.test(text)) pasteLink(text);
+    else toast('Nothing to paste — copy a picture first (on a slide, or a picture/file on your computer).', 'info', 6000);
+  }, true);
+
+  // ---- drag and drop from the computer (or a picture dragged from a web page) ----
+  const mount0 = P.mount;
+  P.mount = function () {
+    const r = mount0.apply(this, arguments);
+    const outer = this.els.outer; if (!outer || outer.dataset.peDrop) return r; outer.dataset.peDrop = '1';
+    const has = e => { const t = [...((e.dataTransfer && e.dataTransfer.types) || [])]; return t.indexOf('Files') >= 0 || t.indexOf('text/uri-list') >= 0; };
+    outer.addEventListener('dragover', e => { if (!P.edit || !has(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; outer.classList.add('pe-drop'); });
+    outer.addEventListener('dragleave', e => { if (!outer.contains(e.relatedTarget)) outer.classList.remove('pe-drop'); });
+    outer.addEventListener('drop', e => {
+      outer.classList.remove('pe-drop'); if (!P.edit || !has(e)) return;
+      e.preventDefault(); e.stopPropagation();
+      const files = [...(e.dataTransfer.files || [])];
+      if (files.length) uploadFiles(files, { newSlide: files.length > 1 });
+      else { const u = String(e.dataTransfer.getData('text/uri-list') || '').split('\n').map(x => x.trim()).filter(x => x && x[0] !== '#')[0]; if (u) pasteLink(u); }
+    });
+    return r;
+  };
+  window.__peClipboard = { copy, pasteClip, uploadFiles, place, clip };   // diagnostics / tests
+})();
 
 /* ==========================================================================
    19_nav_return.js — Learning Block ⇄ Practice keeps your place (2026-09-30)
@@ -17502,7 +17781,7 @@ function ueNormMedia(list) { return (list || []).map(m => ({ type: m.type, url: 
 function ueSynthRec(m, dx, kind) {
   const src = resolveImgUrl(m.url);
   return { id: 'ue-' + hashStr(String(m.url)).toString(36), embed: true, kind: kind || 'image', src, thumb: '', page: /^https?:/i.test(m.url) ? m.url : '',
-    dx: dx || m.caption || 'Image', title: m.caption || 'Image', caption: m.caption || '', credit: m.credit || 'added by the teacher', provider: 'ue', stain: '', mag: '', sections: [], look: [] };
+    dx: dx || m.caption || 'Image', title: m.caption || 'Image', caption: m.caption || '', credit: m.credit || '', provider: 'ue', stain: '', mag: '', sections: [], look: [] };
 }
 
 const UE = {
@@ -17777,7 +18056,7 @@ UE.register('atlas', { label: 'Atlas image', title: x => x.dx || x.title,
     const imgs = l.filter(m => m.type === 'image'); const first = imgs[0];
     if (!first) { c.src = ''; c.thumb = ''; c.embed = false; c.challenge = false; if (!c.page) c.page = orig.page || ''; }
     else if (!(first.n && first.url === orig.src)) {
-      c.src = resolveImgUrl(first.url); c.thumb = ''; c.embed = true; c.provider = 'ue'; c.credit = first.credit || 'added by the teacher';
+      c.src = resolveImgUrl(first.url); c.thumb = ''; c.embed = true; c.provider = 'ue'; c.credit = first.credit || '';
       c.page = /^https?:/i.test(first.url) ? first.url : ''; if (first.caption) c.caption = first.caption;
     }
     return imgs.slice(1).concat(l.filter(m => m.type !== 'image'));
@@ -17830,14 +18109,14 @@ function ueRemap() { rebuildQuestions(); }
 /* Image-atlas records */
 (function () {
   if (typeof ATLAS === 'undefined') return;
-  if (DATA.imageProviders && !DATA.imageProviders.ue) DATA.imageProviders.ue = { name: 'Teacher', long: 'Added by the teacher', mode: 'embed', rule: 'Pictures added or replaced by the teacher in Edit mode (attribution as entered).', terms: '#/practical/atlas' };
+  if (DATA.imageProviders && !DATA.imageProviders.ue) DATA.imageProviders.ue = { name: 'Course images', long: 'Course images', mode: 'embed', rule: 'Pictures added or replaced by the teacher in Edit mode (attribution as entered).', terms: '#/practical/atlas' };
   const all0 = ATLAS.all; let cache = null, cacheVer = -1, cacheSrc = null;
   ATLAS.all = function () {
     if (cache && cacheVer === UE.ver && cacheSrc === DATA.images) return cache;
     cache = all0.call(this).map(x => UE.apply('atlas', x.id, x)); cacheVer = UE.ver; cacheSrc = DATA.images; return cache;
   };
   const cr0 = atlasCreditEl;
-  atlasCreditEl = function (rec, stop) { if (rec && rec.provider === 'ue') return el('span', { class: 'atl-credit-in' }, 'Image: ', rec.credit || 'added by the teacher'); return cr0.apply(this, arguments); };
+  atlasCreditEl = function (rec, stop) { if (rec && rec.provider === 'ue') return rec.credit ? el('span', { class: 'atl-credit-in' }, 'Image: ', rec.credit) : el('span', { class: 'atl-credit-in' }); return cr0.apply(this, arguments); };
   const card0 = PracAtlas.card, detail0 = PracAtlas.detail;
   PracAtlas.card = function (x) { const n = card0.apply(this, arguments); try { const b = UE.bar('atlas', x.id, x); if (b) n.appendChild(b); } catch (e) { /* ignore */ } return n; };
   PracAtlas.detail = function (page, x) {
