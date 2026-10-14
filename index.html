@@ -2328,10 +2328,12 @@ function toCSV(rows) {
  * triggers the browser's native print dialog. bodyHtml is trusted, already-escaped markup
  * (build it from the platform's own renderers, e.g. an existing DOM node's innerHTML).
  */
-function printHTML(title, subtitle, bodyHtml) {
-  const w = window.open('', '_blank');
-  if (!w) { toast('Please allow pop-ups to print.', 'warn'); return; }
-  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
+function printHTML(title, subtitle, bodyHtml, opts) {
+  // 2026-10-14: pictures load before the print dialog (no lazy loading on paper); optional extra CSS (opts.css);
+  // when the browser blocks the print window, the same document prints from a hidden frame in this page instead.
+  const o = opts || {};
+  bodyHtml = String(bodyHtml || '').replace(/\sloading="lazy"/g, '');
+  const doc = auto => `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(title)}</title>
     <style>
       @page { size: A4; margin: 16mm 14mm; }
       * { box-sizing: border-box; }
@@ -2366,6 +2368,7 @@ function printHTML(title, subtitle, bodyHtml) {
          the browser default stylesheet hides everything but <summary> until [open] is set. */
       details:not([open]) > *:not(summary) { display: block !important; }
       details > summary { font-weight: 700; margin-bottom: .2rem; }
+      ${o.css || ''}
       footer.print-foot { margin-top: 2rem; padding-top: .6rem; border-top: 1px solid #ccc; font-family: Arial, Helvetica, sans-serif; font-size: .72rem; color: #888; }
     </style></head><body>
     <header class="print-head">
@@ -2375,9 +2378,18 @@ function printHTML(title, subtitle, bodyHtml) {
     </header>
     <div class="print-body">${bodyHtml}</div>
     <footer class="print-foot">Printed from ${esc(COURSE.title)} · Created by ${esc(AUTHOR)} · ${esc(new Date().toLocaleString())}</footer>
-    <script>window.onload=()=>{window.print();}<\/script>
-    </body></html>`);
-  w.document.close();
+    ${auto ? '<script>window.onload=()=>{setTimeout(()=>window.print(),150);}<\/script>' : ''}
+    </body></html>`;
+  const w = window.open('', '_blank');
+  if (w) { w.document.write(doc(true)); w.document.close(); return; }
+  const f = document.createElement('iframe');
+  f.setAttribute('aria-hidden', 'true'); f.style.cssText = 'position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none';
+  document.body.appendChild(f);
+  const d = f.contentDocument || (f.contentWindow && f.contentWindow.document);
+  if (!d) { f.remove(); toast('Please allow pop-ups to print.', 'warn'); return; }
+  f.addEventListener('load', () => { setTimeout(() => { try { f.contentWindow.focus(); f.contentWindow.print(); } catch (e) { toast('Please allow pop-ups to print.', 'warn'); } setTimeout(() => f.remove(), 120000); }, 150); }, { once: true });
+  d.open(); d.write(doc(false)); d.close();
+  toast('Opening the print dialog…', 'info', 3000);
 }
 function readFileAsDataURL(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); }); }
 function readFileAsArrayBuffer(file) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsArrayBuffer(file); }); }
@@ -4793,7 +4805,8 @@ Views.explain = {
         el('button', { class: 'btn btn-sm', onclick: () => { (t.sections || []).forEach(s => this.toggleSection(s.id, false)); } }, '⤡ Collapse all'),
         el('button', { class: 'btn btn-sm', onclick: () => Router.go('revision', ['topic', t.id]) }, '🧠 Practise this topic'),
         el('button', { class: 'btn btn-sm', onclick: () => Router.go('present', ['topic', t.id]) }, '🎞️ Present'),
-        el('button', { class: 'btn btn-sm', onclick: () => this.printTopic(t) }, '🖨 Print'))));
+        el('button', { class: 'btn btn-sm', onclick: () => this.printTopic(t) }, '🖨 Print'),
+        el('button', { class: 'btn btn-sm btn-primary print-chapter-btn', title: 'Print or save as PDF every topic of this chapter', onclick: () => this.printChapter() }, '🖨️ Print Entire Chapter'))));
     if (t.syllabusQuestions && t.syllabusQuestions.length) {
       main.appendChild(el('details', { class: 'exam-qs' },
         el('summary', null, '🎯 Exam-style questions for this topic (from the syllabus)'),
@@ -4819,7 +4832,8 @@ Views.explain = {
       el('p', null, 'Work through the ' + topics.length + ' topics below. Each section has key points, syllabus tables, step-through flowcharts, original illustrations and links to real specimens. Then test yourself in Revision, try the clinical Cases, and sit the formal Quiz when your teacher opens it.'),
       el('div', { class: 'hero-meta' },
         el('div', { class: 'pbar' }, el('span', { style: { width: ov.pct + '%' } })), el('span', { class: 'small' }, ov.pct + '% of the course read'),
-        last && getTopic(last) ? el('button', { class: 'btn btn-sm', onclick: () => Router.go('explain', [last]) }, '▶ Continue: ' + getTopic(last).title) : null)));
+        last && getTopic(last) ? el('button', { class: 'btn btn-sm', onclick: () => Router.go('explain', [last]) }, '▶ Continue: ' + getTopic(last).title) : null,
+        el('button', { class: 'btn btn-sm btn-primary print-chapter-btn', title: 'Print or save as PDF every topic of this chapter', onclick: () => this.printChapter() }, '🖨️ Print Entire Chapter'))));
     const stats = el('div', { class: 'stat-strip' },
       el('div', { class: 'stat' }, el('div', { class: 'v' }, String(topics.length)), el('div', { class: 'k' }, 'Topics')),
       el('div', { class: 'stat' }, el('div', { class: 'v' }, String(allSections().length)), el('div', { class: 'k' }, 'Sections')),
@@ -4913,6 +4927,36 @@ Views.explain = {
     });
     if (t.mustKnow && t.mustKnow.length) { const mk = el('div', { class: 'mustknow-card' }, el('h3', null, '✅ MUST KNOW — ' + t.title), el('ul', null, t.mustKnow.map(k => el('li', { html: mdInline(esc(k)) })))); container.appendChild(mk); }
     printHTML(t.title, COURSE.chapter + ' · ' + sections.length + ' section' + (sections.length === 1 ? '' : 's'), container.innerHTML);
+  },
+  /** 2026-10-14: the whole chapter — every topic and every section once, in course order, built with the same renderer
+   *  as the single-topic print (fillBody), so collapsed or unopened sections are included too. */
+  printChapter() {
+    const topics = getTopics().filter(t => t && (t.sections || []).length);
+    if (!topics.length) { toast('There is nothing to print yet.', 'warn'); return; }
+    const nSec = topics.reduce((a, t) => a + t.sections.length, 0);
+    const box = document.createElement('div');
+    box.appendChild(el('nav', { class: 'print-toc' }, el('h2', null, 'Contents'),
+      el('ol', null, topics.map(t => el('li', null, (t.icon ? t.icon + ' ' : '') + t.title, el('span', { class: 'toc-n' }, ' — ' + plural(t.sections.length, 'section')))))));
+    topics.forEach((t, ti) => {
+      const tp = el('section', { class: 'print-topic', 'data-topic': t.id });
+      tp.appendChild(el('h1', { class: 'print-topic-h' }, 'Topic ' + (ti + 1) + ' · ' + (t.icon ? t.icon + ' ' : '') + t.title));
+      if (t.summary) tp.appendChild(el('p', { class: 'print-topic-sum' }, t.summary));
+      t.sections.forEach((s, i) => {
+        const sec = el('div', { class: 'print-section', 'data-section': s.id });
+        sec.appendChild(el('h2', null, (ti + 1) + '.' + (i + 1) + ' ' + s.heading));
+        if (s.ref) sec.appendChild(el('div', { style: 'font-size:.78rem;color:#666;margin:-.4rem 0 .5rem' }, s.ref));
+        const b = document.createElement('div'); this.fillBody(b, t, s, i); sec.appendChild(b);
+        tp.appendChild(sec);
+      });
+      if (t.mustKnow && t.mustKnow.length) tp.appendChild(el('div', { class: 'mustknow-card' }, el('h3', null, '✅ MUST KNOW — ' + t.title), el('ul', null, t.mustKnow.map(k => el('li', { html: mdInline(esc(k)) })))));
+      box.appendChild(tp);
+    });
+    printHTML(COURSE.title, [COURSE.chapter, 'Entire chapter', plural(topics.length, 'topic'), plural(nSec, 'section')].filter(Boolean).join(' · '), box.innerHTML, { css:
+      '.print-toc{margin:1rem 0 0}.print-toc h2{margin-top:.4rem}.print-toc ol{padding-left:1.4rem}.print-toc li{font-size:.95rem;margin:.15rem 0}.print-toc .toc-n{color:#777;font-size:.85rem}' +
+      '.print-topic{break-before:page;page-break-before:always}' +
+      'h1.print-topic-h{font-size:1.35rem;margin:0 0 .3rem;padding:.35rem 0;border-bottom:3px solid #0f4d67}.print-topic-sum{color:#444;font-style:italic;margin:.2rem 0 .8rem}' +
+      '.print-topic .print-section{page-break-inside:auto;break-inside:auto}.print-topic .print-section>h2{break-after:avoid}' +
+      '@page{@bottom-center{content:"Page " counter(page) " of " counter(pages);font:9pt Arial,Helvetica,sans-serif;color:#777}@bottom-left{content:"' + String(COURSE.title).replace(/["\\]/g, '') + '";font:9pt Arial,Helvetica,sans-serif;color:#999}}' });
   },
   sectionEditBar(t, s, i) {
     const n = (t.sections || []).length;
