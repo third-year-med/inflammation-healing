@@ -16782,7 +16782,15 @@ Views.review = {
     const startBtn = el('button', { class: 'btn btn-sm', type: 'button' }, st.startedAt && Date.now() - st.startedAt < 900000 ? 'Restart timer' : 'Start 15:00 timer');
     startBtn.addEventListener('click', () => { st.startedAt = Date.now(); save(); if (timer) clearInterval(timer); timer = setInterval(() => { if (!document.body.contains(timerTxt)) { clearInterval(timer); return; } tick(); }, 1000); tick(); startBtn.textContent = 'Restart timer'; });
     if (st.startedAt && Date.now() - st.startedAt < 900000) { tick(); timer = setInterval(() => { if (!document.body.contains(timerTxt)) { clearInterval(timer); return; } tick(); }, 1000); }
-    page.appendChild(lmrPartHead(part, null, null, el('div', { class: 'lmr-timer', role: 'timer', 'aria-label': 'Time left' }, timerTxt, startBtn)));
+    // 🖨 Print (2026-10-14): the whole 15-minute list, like the other Last-Minute Review parts (no checkboxes, timer or block links)
+    const Q15_PRINT_CSS = '.lmr-quick h2,.lmr-quick h3{font-size:13pt;margin:16pt 0 6pt;color:#0b2a4a;border-bottom:1px solid #cfd8e3;padding-bottom:2pt;break-after:avoid;page-break-after:avoid}' +
+      '.lmr-q{border-left:3px solid #0f4d67;padding:3pt 0 3pt 9pt;margin:0 0 9pt;break-inside:avoid;page-break-inside:avoid}' +
+      '.lmr-q-k{font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;font-weight:700;letter-spacing:.06em;color:#0f4d67;margin-bottom:2pt}' +
+      '.lmr-q-trap{border-left-color:#b45309}.lmr-q-trap .lmr-q-k{color:#b45309}.lmr-q-comp{border-left-color:#6b4fbb}.lmr-q-comp .lmr-q-k{color:#6b4fbb}.lmr-q-morph{border-left-color:#0e7490}.lmr-q-morph .lmr-q-k{color:#0e7490}' +
+      '.lmr-q .lmr-tk{display:inline-block;font-family:Arial,Helvetica,sans-serif;font-size:7.5pt;letter-spacing:.05em;margin-top:3pt}.lmr-q .lmr-cue{margin:1pt 0 0}.lmr-q table{margin:4pt 0}';
+    const printBtn = el('button', { class: 'btn btn-sm', type: 'button', onclick: () => lmrPrint('15-Minute Review', COURSE.title + ' · Last-Minute Review · ' + plural(total, 'item') + ' · ≈ ' + mins + ' min',
+      el('div', null, el('style', null, Q15_PRINT_CSS), list.cloneNode(true))) }, '🖨 Print');
+    page.appendChild(lmrPartHead(part, null, null, el('div', { class: 'row', style: 'gap:.5rem;align-items:center;flex-wrap:wrap' }, el('div', { class: 'lmr-timer', role: 'timer', 'aria-label': 'Time left' }, timerTxt, startBtn), printBtn)));
     page.appendChild(el('div', { class: 'lmr-qbar' }, el('div', { class: 'lmr-progress', role: 'progressbar', 'aria-label': 'Items done' }, bar), el('span', { class: 'small' }, cnt, ' done · ≈ ' + mins + ' min · ' + plural(total, 'item') + ' chosen from all four parts, in teaching order'),
       el('button', { class: 'lmr-more', type: 'button', onclick: () => { st.done = {}; save(); this.render(); } }, 'Reset')));
     const list = el('div', { class: 'lmr-list lmr-quick' });
