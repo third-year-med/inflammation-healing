@@ -15026,7 +15026,28 @@ Views.live = {
   },
 
   /* ---------------- join ---------------- */
+  /** 2026-10-15: a registered student who is signed in to the module enters directly — no class code. The server
+   *  (Code.gs gateRequest_) already knows the student from the sign-in session and fills in name, email and the
+   *  code. If the server is not updated yet (it answers "badcode"), the usual code form is shown instead. */
   joinCard() {
+    const stu = window.NEO_BOOT && window.NEO_BOOT.role === 'student' && window.NEO_BOOT.studentToken && window.NEO_BOOT.studentToken();
+    if (stu && !this._directJoinFailed) {
+      const msg = el('div', { role: 'status', 'aria-live': 'polite', class: 'msg info' }, 'Entering the Live Classroom…');
+      const card = el('div', { class: 'card lv-join' }, el('div', { class: 'lv-join-ico', 'aria-hidden': 'true' }, '💬'), el('h2', null, 'Live Classroom'), msg);
+      if (!this._directJoining) {
+        this._directJoining = true;
+        Live.join('', '', '').then(r => {
+          this._directJoining = false;
+          if (r && r.ok) { this.render(); return; }
+          if (r && r.code === 'badcode') { this._directJoinFailed = true; this.render(); return; } // server not updated → code form
+          if (document.body.contains(card)) {
+            msg.className = 'msg bad'; msg.textContent = (r && r.error) || 'Could not reach the class server.';
+            card.appendChild(el('button', { class: 'btn btn-primary btn-block mt1', onclick: () => this.render() }, 'Try again'));
+          }
+        });
+      }
+      return card;
+    }
     const quiz = Store.get('quiz_identity_v1', {}) || {};
     const code = el('input', { type: 'text', placeholder: 'e.g. CLASS-4821', value: Store.get('live_classcode_v1', '') || '', autocomplete: 'off', style: 'font-family:var(--mono);letter-spacing:.05em' });
     const name = el('input', { type: 'text', placeholder: 'Your full name', value: quiz.name || '', autocomplete: 'name' });
