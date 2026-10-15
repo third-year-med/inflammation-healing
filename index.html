@@ -83,6 +83,7 @@ label.field .hint{font-weight:400;color:var(--muted);font-size:.8rem}
 .badge.ok{background:var(--ok-soft);color:var(--ok)}
 .badge.bad{background:var(--bad-soft);color:var(--bad)}
 .badge.warn{background:var(--warn-soft);color:var(--warn)}
+.data-table tr.att-absent td{background:var(--bad-soft)}
 .badge.violet{background:#f1eafe;color:var(--violet)}
 .badge.plain{text-transform:none;letter-spacing:0}
 .chip{display:inline-flex;align-items:center;gap:.35rem;padding:.3rem .7rem;border-radius:999px;border:1px solid var(--line);background:#fff;font-size:.82rem;cursor:pointer}
@@ -9894,62 +9895,140 @@ Views.attendance = {
     this.render();
   },
 
+  /* Full register (2026-10-15): the report lists EVERY student registered for this module/group (Teacher Portal →
+     Students; the same Students list the sign-in uses), each Present or Absent, with totals and percentages. Check-ins
+     are matched to accounts by Student ID (the server records the signed-in account's username), else — for
+     older records — by an unambiguous full name. Absent is shown only once
+     attendance is closed; while the session is open those students are "Not checked in yet". Stored records, the
+     check-in flow, the code and Drive sync are unchanged. */
+  loadRoster(force) {
+    if (!force && this._roster && Date.now() - this._roster.at < 120000) return Promise.resolve(this._roster.list);
+    if (!this._rosterP) this._rosterP = Backend.authedPost({ action: 'listStudents' }, { timeout: 30000 }).then(r => {
+      const list = r && r.ok && Array.isArray(r.students) ? r.students.filter(x => x.active !== false) : null;
+      this._rosterP = null; this._roster = { at: Date.now(), list }; return list;
+    }, () => { this._rosterP = null; this._roster = { at: Date.now(), list: null }; return null; });
+    return this._rosterP;
+  },
+  attRegister(s, records, roster) {
+    if (!roster || !roster.length) return null;
+    const final = s.status !== 'active';
+    const idN = v => String(v || '').trim().toLowerCase().replace(/\s+/g, '');
+    const byId = {}, byName = {};
+    roster.forEach(st => { byId[idN(st.username)] = st; const k = normText(st.name || ''); if (k) byName[k] = byName[k] === undefined ? st : null; });
+    const hit = new Map(), extra = [];
+    records.slice().sort((a, b) => Number(a.scannedAt) - Number(b.scannedAt)).forEach(r => {
+      const st = (r.studentId && byId[idN(r.studentId)]) || byName[normText(r.name || '')] || null;
+      if (st && !hit.has(st)) hit.set(st, r); else extra.push(r);
+    });
+    const rows = roster.map(st => ({ name: st.name, studentId: st.username, email: st.email || '', rec: hit.get(st) || null }));
+    const present = rows.filter(x => x.rec).sort((a, b) => Number(a.rec.scannedAt) - Number(b.rec.scannedAt));
+    const absent = rows.filter(x => !x.rec).sort((a, b) => String(a.studentId).localeCompare(String(b.studentId)));
+    const n = rows.length, p = present.length, attPct = Math.round(p / n * 100);
+    return { final, n, p, a: n - p, attPct, absPct: 100 - attPct, rows: absent.concat(present), extra };
+  },
+
   /* ---------------- Report / export / print ---------------- */
   reportCard(s, records, dismissable, closeModal) {
+    const roster = this._roster ? this._roster.list : undefined; // undefined = not loaded yet
+    const reg = this.attRegister(s, records, roster);
     const drive = s.driveStatus === 'synced' ? el('span', { class: 'msg ok', style: 'display:inline-block' }, '☁ Synced to Google Drive — ', el('a', { href: s.driveUrl, target: '_blank', rel: 'noopener' }, 'open sheet ↗'))
       : s.driveStatus === 'failed' ? el('div', { class: 'msg warn', style: 'display:inline-block' }, '⚠ Drive sync failed (attendance is safe in the database). ', el('button', { class: 'btn btn-xs', onclick: async (e) => { e.target.disabled = true; e.target.textContent = 'Syncing…'; const r = await Backend.authedPost({ action: 'retrySyncAttendance', sessionId: s.sessionId }, { timeout: 60000 }); if (r && r.ok) { toast('✓ Synced to Drive.', 'ok'); s.driveStatus = 'synced'; s.driveUrl = r.driveUrl; s.driveError = ''; this.hist = null; this.render(); } else { s.driveError = (r && r.error) || s.driveError; e.target.disabled = false; e.target.textContent = 'Retry sync'; toast('Still could not sync: ' + ((r && r.error) || ''), 'bad', 9000); } } }, 'Retry sync'),
           s.driveError ? el('div', { class: 'small', style: 'margin-top:.3rem;white-space:normal' }, 'Reason: ' + s.driveError) : null)
       : el('span', { class: 'small muted' }, 'Not yet synced to Drive.');
+    const delBtn = (r) => el('button', { class: 'btn btn-xs btn-danger', title: 'Remove this attendance record', onclick: async (e) => {
+      const b = e.currentTarget; b.disabled = true;
+      const done = await this.removeRecord(s.sessionId, r, () => {
+        const k = records.indexOf(r); if (k >= 0) records.splice(k, 1);
+        if (AttT.sessionId === s.sessionId) AttT.poll();
+        this.hist = null; // present counts in the history list changed
+        if (document.body.contains(card)) card.replaceWith(this.reportCard(s, records, dismissable, closeModal));
+        if (attTeacherVisible()) this.render(); // refresh the portal page (history counts) behind / around this report
+      });
+      if (!done && document.body.contains(b)) b.disabled = false;
+    } }, '🗑 Delete');
+    const statusBadge = (row) => row.rec ? el('span', { class: 'badge ok' }, row.rec.status === 'present' || !row.rec.status ? 'Present' : row.rec.status)
+      : reg.final ? el('span', { class: 'badge bad' }, 'Absent') : el('span', { class: 'badge' }, 'Not checked in yet');
+    const stats = reg
+      ? [['Registered', reg.n], ['Present', reg.p], [reg.final ? 'Absent' : 'Not checked in yet', reg.a], ['Attendance', reg.attPct + '%'], ['Absence', reg.final ? reg.absPct + '%' : '—']]
+      : [['Present', records.length], ['Started', fmtDate(s.createdAt)], ['Ended', s.endedAt ? fmtDate(s.endedAt) : '—']];
+    const head = ['#', 'Name', 'Student ID', 'Email', 'Time', 'Status', 'Action'].map(h => el('th', null, h));
+    const tbody = reg
+      ? reg.rows.map((row, i) => el('tr', { class: row.rec ? '' : 'att-absent' }, el('td', null, String(i + 1)), el('td', { dir: 'auto' }, row.name), el('td', null, row.studentId || '—'), el('td', null, row.email || '—'),
+          el('td', null, row.rec ? fmtDate(row.rec.scannedAt) : '—'), el('td', null, statusBadge(row)), el('td', null, row.rec ? delBtn(row.rec) : null)))
+        .concat(reg.extra.length ? [el('tr', null, el('td', { colspan: '7', class: 'small muted' }, 'Checked in, but no longer on this group’s student list (e.g. deactivated) — not counted in the percentages:'))] : [])
+        .concat(reg.extra.map((r, i) => el('tr', null, el('td', null, String(reg.rows.length + i + 1)), el('td', { dir: 'auto' }, r.name), el('td', null, r.studentId || '—'), el('td', null, r.email || '—'), el('td', null, fmtDate(r.scannedAt)),
+          el('td', null, el('span', { class: 'badge warn' }, 'Present · not on the list')), el('td', null, delBtn(r)))))
+      : records.length ? records.map((r, i) => el('tr', null, el('td', null, String(i + 1)), el('td', { dir: 'auto' }, r.name), el('td', null, r.studentId || '—'), el('td', null, r.email || '—'), el('td', null, fmtDate(r.scannedAt)),
+          el('td', null, el('span', { class: 'badge' }, r.status === 'present' || !r.status ? 'Present' : r.status)), el('td', null, delBtn(r))))
+        : [el('tr', null, el('td', { colspan: '7', class: 'center muted' }, 'No students checked in.'))];
     const card = el('div', { class: 'card mt2' },
       el('div', { class: 'row between' }, el('h3', { style: 'margin:0' }, '📊 ' + s.sessionTitle),
         dismissable ? el('button', { class: 'btn btn-sm', onclick: () => { this.report = null; this.render(); } }, 'Dismiss') : null),
-      el('p', { class: 'small muted' }, (s.course || '') + (s.chapter ? ' — ' + s.chapter : '') + (s.academicYear ? ' · ' + s.academicYear : '') + (s.teacher ? ' · ' + s.teacher : '')),
-      el('div', { class: 'stat-cards mt1' }, [['Present', records.length], ['Started', fmtDate(s.createdAt)], ['Ended', s.endedAt ? fmtDate(s.endedAt) : '—']].map(([k, v]) => el('div', { class: 'stat' }, el('div', { class: 'v' }, String(v)), el('div', { class: 'k' }, k)))),
+      el('p', { class: 'small muted' }, (s.course || '') + (s.chapter ? ' — ' + s.chapter : '') + (s.academicYear ? ' · ' + s.academicYear : '') + (s.teacher ? ' · ' + s.teacher : '')
+        + (reg ? ' · Started ' + fmtDate(s.createdAt) + (s.endedAt ? ' · Ended ' + fmtDate(s.endedAt) : '') : '')),
+      el('div', { class: 'stat-cards mt1' }, stats.map(([k, v]) => el('div', { class: 'stat' }, el('div', { class: 'v' }, String(v)), el('div', { class: 'k' }, k)))),
+      roster === undefined ? el('div', { class: 'small muted mt1' }, 'Loading the registered student list…')
+        : roster === null ? el('div', { class: 'msg warn mt1' }, 'Could not load the registered student list — showing check-ins only. ', el('button', { class: 'btn btn-xs', onclick: () => this.loadRoster(true).then(() => { if (document.body.contains(card)) card.replaceWith(this.reportCard(s, records, dismissable, closeModal)); }) }, 'Try again'))
+        : !reg ? el('div', { class: 'small muted mt1' }, 'No students are registered for this group yet (Teacher Portal → Students), so only check-ins are listed.')
+        : !reg.final ? el('div', { class: 'small muted mt1' }, 'Absences are finalised when attendance is closed.') : null,
       s.status === 'active' ? el('div', { class: 'msg info mt1', style: 'display:flex;flex-wrap:wrap;gap:.5rem;align-items:center' },
         el('span', null, '🟢 This session is still open — students can still check in.'),
         el('button', { class: 'btn btn-sm', onclick: () => this.resumeSession(s, closeModal) }, '▶ Resume (show QR)'),
         el('button', { class: 'btn btn-sm btn-danger', onclick: () => this.endSessionById(s, closeModal) }, '⏹ End session')) : null,
       el('div', { class: 'mt1' }, drive),
       el('div', { class: 'row mt1' },
-        el('button', { class: 'btn btn-sm btn-primary', disabled: !records.length, onclick: () => this.exportCSV(s, records) }, '⤓ Export to Excel (CSV)'),
-        el('button', { class: 'btn btn-sm', onclick: () => this.printReport(s, records) }, '🖨 Print attendance report')),
-      el('div', { class: 'table-scroll mt1' }, el('table', { class: 'data-table' },
-        el('thead', null, el('tr', null, ['#', 'Name', 'Student ID', 'Email', 'Time', 'Status', 'Action'].map(h => el('th', null, h)))),
-        el('tbody', null, records.length ? records.map((r, i) => el('tr', null, el('td', null, String(i + 1)), el('td', null, r.name), el('td', null, r.studentId || '—'), el('td', null, r.email || '—'), el('td', null, fmtDate(r.scannedAt)),
-          el('td', null, el('span', { class: 'badge' }, r.status === 'present' || !r.status ? 'Present' : r.status)),
-          el('td', null, el('button', { class: 'btn btn-xs btn-danger', title: 'Remove this attendance record', onclick: async (e) => {
-            const b = e.currentTarget; b.disabled = true;
-            const done = await this.removeRecord(s.sessionId, r, () => {
-              const k = records.indexOf(r); if (k >= 0) records.splice(k, 1);
-              if (AttT.sessionId === s.sessionId) AttT.poll();
-              this.hist = null; // present counts in the history list changed
-              if (document.body.contains(card)) card.replaceWith(this.reportCard(s, records, dismissable, closeModal));
-              if (attTeacherVisible()) this.render(); // refresh the portal page (history counts) behind / around this report
-            });
-            if (!done && document.body.contains(b)) b.disabled = false;
-          } }, '🗑 Delete'))))
-          : el('tr', null, el('td', { colspan: '7', class: 'center muted' }, 'No students checked in.'))))));
+        el('button', { class: 'btn btn-sm btn-primary', disabled: !records.length && !reg, onclick: () => this.exportCSV(s, records, reg) }, '⤓ Export to Excel (CSV)'),
+        el('button', { class: 'btn btn-sm', onclick: () => this.printReport(s, records, reg) }, '🖨 Print attendance report')),
+      el('div', { class: 'table-scroll mt1' }, el('table', { class: 'data-table att-register' }, el('thead', null, el('tr', null, head)), el('tbody', null, tbody))));
+    if (roster === undefined) this.loadRoster().then(() => { if (document.body.contains(card)) card.replaceWith(this.reportCard(s, records, dismissable, closeModal)); });
     return card;
   },
-  exportCSV(s, records) {
+  exportCSV(s, records, reg) {
     const rows = [['University', (this.settings && this.settings.university) || ''], ['Faculty', (this.settings && this.settings.faculty) || ''], ['Department', (this.settings && this.settings.department) || ''],
       ['Course', s.course], ['Academic Year', s.academicYear], ['Chapter', s.chapter], ['Teaching Session', s.sessionTitle], ['Teacher', s.teacher],
-      ['Started', fmtDate(s.createdAt)], ['Ended', s.endedAt ? fmtDate(s.endedAt) : ''], ['Total present', String(records.length)], []];
-    rows.push(['No.', 'Student Name', 'Student ID', 'Email', 'Date', 'Attendance Time', 'Status']);
-    records.forEach((r, i) => { const d = new Date(r.scannedAt); rows.push([i + 1, r.name, r.studentId || '', r.email || '', d.toLocaleDateString(), d.toLocaleTimeString(), 'Present']); });
+      ['Started', fmtDate(s.createdAt)], ['Ended', s.endedAt ? fmtDate(s.endedAt) : '']];
+    const tm = (ts) => { const d = new Date(ts); return [d.toLocaleDateString(), d.toLocaleTimeString()]; };
+    if (reg) {
+      rows.push(['Registered students', String(reg.n)], ['Present', String(reg.p)], [reg.final ? 'Absent' : 'Not checked in yet', String(reg.a)],
+        ['Attendance %', reg.attPct + '%'], ['Absence %', reg.final ? reg.absPct + '%' : '']);
+      if (reg.extra.length) rows.push(['Checked in, not on the student list', String(reg.extra.length)]);
+      rows.push([], ['No.', 'Student Name', 'Student ID', 'Email', 'Date', 'Attendance Time', 'Status']);
+      reg.rows.forEach((x, i) => rows.push([i + 1, x.name, x.studentId || '', x.email || ''].concat(x.rec ? tm(x.rec.scannedAt) : ['', ''], [x.rec ? 'Present' : reg.final ? 'Absent' : 'Not checked in yet'])));
+      reg.extra.forEach((r, i) => rows.push([reg.rows.length + i + 1, r.name, r.studentId || '', r.email || ''].concat(tm(r.scannedAt), ['Present (not on the student list)'])));
+    } else {
+      rows.push(['Total present', String(records.length)], []);
+      rows.push(['No.', 'Student Name', 'Student ID', 'Email', 'Date', 'Attendance Time', 'Status']);
+      records.forEach((r, i) => { rows.push([i + 1, r.name, r.studentId || '', r.email || ''].concat(tm(r.scannedAt), ['Present'])); });
+    }
     downloadText('attendance-' + s.code + '-' + new Date(s.createdAt).toISOString().slice(0, 10) + '.csv', toCSV(rows), 'text/csv;charset=utf-8');
     toast('CSV downloaded — opens directly in Excel.', 'ok');
   },
-  printReport(s, records) {
+  printReport(s, records, reg) {
     const inst = this.settings || {};
     const w = window.open('', '_blank');
     if (!w) { toast('Please allow pop-ups to print the report.', 'warn'); return; }
-    const rows = records.map((r, i) => `<tr><td>${i + 1}</td><td>${escHtml(r.name)}</td><td>${escHtml(r.studentId || '')}</td><td>${fmtDate(r.scannedAt)}</td><td>Present</td></tr>`).join('');
+    const tr = (i, name, id, time, status, cls) => `<tr${cls ? ` class="${cls}"` : ''}><td>${i}</td><td dir="auto">${escHtml(name)}</td><td>${escHtml(id || '')}</td><td>${time}</td><td>${status}</td></tr>`;
+    let rows, summary;
+    if (reg) {
+      rows = reg.rows.map((x, i) => x.rec ? tr(i + 1, x.name, x.studentId, fmtDate(x.rec.scannedAt), 'Present', '')
+        : tr(i + 1, x.name, x.studentId, '—', reg.final ? '<b>Absent</b>' : 'Not checked in yet', 'abs')).join('')
+        + (reg.extra.length ? `<tr><td colspan="5" class="note">Checked in, but no longer on this group’s student list — not counted in the percentages:</td></tr>` : '')
+        + reg.extra.map((r, i) => tr(reg.rows.length + i + 1, r.name, r.studentId, fmtDate(r.scannedAt), 'Present (not on the student list)', '')).join('');
+      summary = `<table class="sum"><tr><th>Registered students</th><th>Present</th><th>${reg.final ? 'Absent' : 'Not checked in yet'}</th><th>Attendance</th><th>Absence</th></tr>
+        <tr><td>${reg.n}</td><td>${reg.p}</td><td>${reg.a}</td><td>${reg.attPct}%</td><td>${reg.final ? reg.absPct + '%' : '—'}</td></tr></table>
+        ${reg.final ? '' : '<p class="note">Attendance is still open — absences are finalised when it is closed.</p>'}`;
+    } else {
+      rows = records.map((r, i) => tr(i + 1, r.name, r.studentId, fmtDate(r.scannedAt), 'Present', '')).join('');
+      summary = '';
+    }
     w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Attendance — ${escHtml(s.sessionTitle)}</title>
       <style>body{font-family:Arial,Helvetica,sans-serif;color:#111;padding:2rem;max-width:800px;margin:0 auto}
       h1{font-size:1.3rem;margin:0 0 .3rem}.meta{margin:.2rem 0 1rem;font-size:.92rem}.meta div{margin:.1rem 0}
       table{width:100%;border-collapse:collapse;margin-top:1rem}th,td{border:1px solid #999;padding:.35rem .5rem;font-size:.85rem;text-align:left}
-      th{background:#eee}.sig{margin-top:2.5rem;display:flex;justify-content:space-between}.sig div{width:45%;border-top:1px solid #333;padding-top:.3rem;font-size:.85rem}
+      th{background:#eee}tr.abs td{background:#fdecec}table.sum th,table.sum td{text-align:center}table.sum td{font-size:1.05rem;font-weight:700}
+      .note{font-size:.8rem;color:#555}tr{break-inside:avoid;page-break-inside:avoid}
+      *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .sig{margin-top:2.5rem;display:flex;justify-content:space-between}.sig div{width:45%;border-top:1px solid #333;padding-top:.3rem;font-size:.85rem}
       @media print{body{padding:0}}</style></head><body>
       <div class="meta">
       ${inst.university ? `<div><b>University:</b> ${escHtml(inst.university)}</div>` : ''}
@@ -9963,8 +10042,9 @@ Views.attendance = {
       <div><b>Date:</b> ${fmtDate(s.createdAt)}</div>
       </div>
       <h1>Attendance Report</h1>
+      ${summary}
       <table><thead><tr><th>No.</th><th>Student Name</th><th>Student ID</th><th>Time</th><th>Status</th></tr></thead><tbody>${rows || '<tr><td colspan="5">No students checked in.</td></tr>'}</tbody></table>
-      <p><b>Total present: ${records.length}</b></p>
+      ${reg ? `<p><b>Registered: ${reg.n} · Present: ${reg.p} (${reg.attPct}%) · ${reg.final ? 'Absent' : 'Not checked in yet'}: ${reg.a}${reg.final ? ' (' + reg.absPct + '%)' : ''}</b></p>` : `<p><b>Total present: ${records.length}</b></p>`}
       <div class="sig"><div>Teacher Signature: ______________________</div><div>Department/Faculty Representative: ______________________</div></div>
       <script>window.onload=()=>{window.print();}<\/script></body></html>`);
     w.document.close();
