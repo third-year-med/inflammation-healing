@@ -9831,10 +9831,13 @@ Views.attendance = {
     const name = el('input', { type: 'text', placeholder: 'Your full name', value: saved.name || '', autocomplete: 'name' });
     const sid = el('input', { type: 'text', placeholder: 'Student ID (optional)', autocomplete: 'off' });
     const email = el('input', { type: 'email', placeholder: 'Email (optional)', value: saved.email || '', autocomplete: 'email' });
+    // a signed-in student is identified by the account: no name / ID / email to type (the server takes them from the session)
+    const acc = Views.quiz && Views.quiz.acct ? Views.quiz.acct() : null;
+    if (acc) { name.value = acc.name; sid.value = acc.studentId; email.value = ''; }
     const msg = el('div');
     const pidKey = 'att_pid_v1::' + s.sessionId;
     const submit = async () => {
-      if (name.value.trim().length < 2) { msg.className = 'msg bad'; msg.textContent = 'Please enter your name.'; return; }
+      if (!acc && name.value.trim().length < 2) { msg.className = 'msg bad'; msg.textContent = 'Please enter your name.'; return; }
       const payload = { action: 'submitAttendance', token: this.checkinToken, name: name.value.trim(), studentId: sid.value.trim(), email: email.value.trim(), participantId: Store.get(pidKey, null) };
       // A whole class can check in within the same few seconds, which can make the
       // backend briefly queue behind its own write lock — retry once on a transient
@@ -9852,7 +9855,7 @@ Views.attendance = {
       }
       if (!(r && r.ok)) { msg.className = 'msg bad'; msg.textContent = (r && r.error) || 'Could not record attendance.'; return; }
       if (r.participantId) Store.set(pidKey, r.participantId);
-      Store.set('quiz_identity_v1', { name: name.value.trim(), email: email.value.trim() });
+      if (!acc) Store.set('quiz_identity_v1', { name: name.value.trim(), email: email.value.trim() });
       this.checkinDone = { session: s, scannedAt: r.scannedAt, alreadyRecorded: !!r.alreadyRecorded };
       this.render();
     };
@@ -9861,11 +9864,12 @@ Views.attendance = {
       el('div', { class: 'small muted' }, s.course + (s.chapter ? ' — ' + s.chapter : '')),
       el('h2', { style: 'margin:.2rem 0' }, s.sessionTitle),
       el('p', { class: 'small muted' }, (s.teacher ? 'Teacher: ' + s.teacher + ' · ' : '') + fmtDate(s.createdAt)),
+      acc ? el('div', { class: 'small muted att-me' }, '👤 ' + acc.name + ' · Student ID ' + acc.studentId) : [
       el('label', { class: 'field mt1' }, 'Your full name', name),
       el('label', { class: 'field' }, 'Student ID (optional)', sid),
-      el('label', { class: 'field' }, 'Email (optional)', email), msg,
+      el('label', { class: 'field' }, 'Email (optional)', email)], msg,
       el('button', { class: 'btn btn-primary btn-block mt1', onclick: submit }, '✓ Check in')));
-    setTimeout(() => name.focus(), 30);
+    if (!acc) setTimeout(() => name.focus(), 30);
   },
 
   /* ---------------- Student: enter the attendance code ---------------- */
@@ -9895,12 +9899,15 @@ Views.attendance = {
     const name = el('input', { type: 'text', placeholder: 'Your full name', value: saved.name || '', autocomplete: 'name' });
     const sid = el('input', { type: 'text', placeholder: 'Student ID (optional)', value: saved.studentId || '', autocomplete: 'off' });
     const email = el('input', { type: 'email', placeholder: 'Email (optional)', value: saved.email || '', autocomplete: 'email' });
+    // a signed-in student types ONLY the code: name / ID / email come from the account (the server takes them from the session)
+    const acc = Views.quiz && Views.quiz.acct ? Views.quiz.acct() : null;
+    if (acc) { name.value = acc.name; sid.value = acc.studentId; email.value = ''; }
     const msg = el('div');
     const btn = el('button', { class: 'btn btn-primary btn-block mt1' }, '✓ Submit Attendance');
     const submit = async () => {
       const c = code.value.trim().toUpperCase();
       if (c.length < 4) { msg.className = 'msg bad'; msg.textContent = 'Please enter the attendance code shown by your teacher.'; code.focus(); return; }
-      if (name.value.trim().length < 2) { msg.className = 'msg bad'; msg.textContent = 'Please enter your name.'; name.focus(); return; }
+      if (!acc && name.value.trim().length < 2) { msg.className = 'msg bad'; msg.textContent = 'Please enter your name.'; name.focus(); return; }
       let pid = Store.get('att_device_pid_v1', null);
       if (!pid) { pid = 'd_' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36); Store.set('att_device_pid_v1', pid); }
       const payload = { action: 'submitAttendanceByCode', code: c, name: name.value.trim(), studentId: sid.value.trim(), email: email.value.trim(), participantId: pid };
@@ -9916,7 +9923,7 @@ Views.attendance = {
       }
       btn.disabled = false;
       if (!(r && r.ok)) { msg.className = 'msg bad'; msg.textContent = (r && r.error) || 'Could not record attendance.'; if (r && r.code === 'badcode') { code.focus(); code.select(); } return; }
-      Store.set('quiz_identity_v1', Object.assign({}, Store.get('quiz_identity_v1', {}) || {}, { name: name.value.trim(), email: email.value.trim(), studentId: sid.value.trim() }));
+      if (!acc) Store.set('quiz_identity_v1', Object.assign({}, Store.get('quiz_identity_v1', {}) || {}, { name: name.value.trim(), email: email.value.trim(), studentId: sid.value.trim() }));
       this.checkinDone = { session: r.session || {}, scannedAt: r.scannedAt, alreadyRecorded: !!r.alreadyRecorded };
       this.render();
     };
@@ -9926,9 +9933,10 @@ Views.attendance = {
       el('h2', { style: 'margin:.1rem 0 .3rem' }, '📋 Enter Attendance Code'),
       el('p', { class: 'small muted' }, 'Type the code your teacher is showing for this session. Each session has its own code.'),
       el('label', { class: 'field mt1' }, 'Attendance code', code),
+      acc ? el('div', { class: 'small muted att-me' }, '👤 ' + acc.name + ' · Student ID ' + acc.studentId) : [
       el('label', { class: 'field' }, 'Your full name', name),
       el('label', { class: 'field' }, 'Student ID (optional)', sid),
-      el('label', { class: 'field' }, 'Email (optional)', email), msg, btn));
+      el('label', { class: 'field' }, 'Email (optional)', email)], msg, btn));
     setTimeout(() => code.focus(), 30);
   },
 
