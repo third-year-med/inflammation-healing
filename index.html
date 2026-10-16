@@ -5894,8 +5894,16 @@ Views.quiz = {
   done: null,      // last finished attempt (shown until dismissed)
   list: null,      // last "My Assessments" response
   loading: false,
-  show() {
-    if (!this.st) { const saved = Store.get(QUIZ_PROGRESS_KEY, null); if (saved && saved.attempt && saved.attempt.questions) this.st = saved; }
+  show(params, entering) {
+    // Opening the tab always shows the list of assessments first. An attempt in progress is parked — its answers are
+    // kept on this device and the server keeps it open — and the student continues it from its ▶ Resume button.
+    if (entering !== false) {
+      const park = st => { if (st && !st.preview && st.attempt && st.attempt.id) Store.set('assess_resp_' + st.attempt.id, { resp: st.resp || {}, flags: st.flags || {} }); };
+      if (this.st && !this.st.preview) { park(this.st); this.st = null; this.list = null; }
+      const saved = Store.get(QUIZ_PROGRESS_KEY, null);
+      if (saved) { park(saved); Store.del(QUIZ_PROGRESS_KEY); }
+      if (!(this.st && this.st.preview)) this.done = null;
+    }
     this.render();
   },
   refresh() { if (!this.st) this.render(); }, // never rebuild an attempt in progress (would lose answers)
@@ -6097,7 +6105,7 @@ Views.quiz = {
       el('button', { class: 'btn btn-sm', style: 'margin-left:.6rem', onclick: () => this.exitPreview() }, '✕ Exit preview')));
     const timerEl = el('div', { class: 'assess-timer', role: 'timer', 'aria-live': 'off' });
     page.appendChild(el('div', { class: 'row between', style: 'margin-bottom:.8rem' },
-      el('div', null, el('h2', { style: 'margin:0' }, '📝 ' + (at.title || 'Assessment')), el('div', { class: 'small muted' }, st.name + (st.email ? ' · ' + st.email : '') + (at.attemptNo > 1 ? ' · attempt ' + at.attemptNo : ''))),
+      el('div', null, el('h2', { style: 'margin:0' }, '📝 ' + (at.title || 'Assessment')), el('div', { class: 'small muted' }, st.name + (st.email ? ' · ' + (/@student\.local$/i.test(st.email) ? 'Student ID ' + st.email.replace(/@student\.local$/i, '') : st.email) : '') + (at.attemptNo > 1 ? ' · attempt ' + at.attemptNo : ''))),
       el('div', { style: 'min-width:220px' }, at.deadlineAt ? timerEl : null, el('div', { class: 'small muted' }, answered + ' of ' + n + ' answered'), el('div', { class: 'pbar' }, el('span', { style: { width: pct(answered, n) + '%' } })))));
     const layout = el('div', { class: 'quiz-run' });
     const left = el('div');
