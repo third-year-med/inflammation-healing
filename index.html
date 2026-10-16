@@ -13135,11 +13135,19 @@ function apwRepaintAll() { document.querySelectorAll('.apw-secret').forEach(w =>
 function apwSecret(id, password) {
   const code = el('code', { class: 'apw-pw', style: 'font-weight:700;letter-spacing:.06em;min-width:4.6em;display:inline-block' });
   const btn = el('button', { class: 'btn btn-xs apw-eye', type: 'button', 'data-a': 'reveal' });
-  const wrap = el('span', { class: 'apw-secret', 'data-id': id, style: 'display:inline-flex;align-items:center;gap:.35rem' }, code, btn);
+  // 📋 Copy: puts the password on the clipboard (to paste into a message to the students) without showing it on screen
+  const copy = el('button', { class: 'btn btn-xs apw-copy', type: 'button', 'data-a': 'copy', title: 'Copy this password (it stays covered on screen)', onclick: async () => {
+    let ok = false;
+    try { await navigator.clipboard.writeText(password); ok = true; }
+    catch (e) { try { const t = el('textarea', { style: 'position:fixed;left:-9999px;top:0' }); t.value = password; document.body.appendChild(t); t.select(); ok = document.execCommand('copy'); t.remove(); } catch (e2) { ok = false; } }
+    if (ok) { copy.textContent = '✓ Copied'; setTimeout(() => { copy.textContent = '📋 Copy'; }, 1800); toast('Password copied — paste it into your message to the students.', 'ok'); }
+    else toast('Could not copy here — press 👁 Show and copy it by hand.', 'warn', 6000);
+  } }, '📋 Copy');
+  const wrap = el('span', { class: 'apw-secret', 'data-id': id, style: 'display:inline-flex;align-items:center;gap:.35rem' }, code, btn, copy);
   wrap._paint = () => {
     const on = APW_SHOWN.id === id;
     code.textContent = on ? password : '••••••'; code.classList.toggle('apw-covered', !on);
-    btn.textContent = on ? '🙈 Hide' : '👁 Show'; btn.setAttribute('aria-pressed', String(on));
+    btn.textContent = on ? 'Hide' : '👁 Show'; btn.setAttribute('aria-pressed', String(on));
     btn.title = on ? 'Cover the password again' : 'Show this password only (e.g. to give it to the class)';
   };
   btn.onclick = () => {
