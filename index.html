@@ -11848,14 +11848,18 @@ const StudentAdmin = {
 
 const PORTAL_TABS = [
   ['attendance', '📋 Attendance'], ['students', '👥 Students'], ['results', '📊 Results'], ['insights', '📈 Study insights'], ['assessments', '📝 Assessments'], ['imported', '🗂 Question Bank'], ['import', '📥 Import questions'], ['importhistory', '📚 Import history'],
-  ['password', '🔑 Assessment passwords'], ['structure', '📚 Course structure'], ['backend', '☁ Backend & sharing'],
+  ['structure', '📚 Course structure'], ['backend', '☁ Backend & sharing'],
   ['backup', '💾 Backup'], ['account', '⚙ Account']
 ];
-const PORTAL_GROUPS = [['Data', ['attendance', 'results', 'insights', 'import', 'importhistory']], ['Teaching', ['assessments', 'imported', 'structure']], ['Administration', ['students', 'password', 'backend', 'backup', 'account']]];
+const PORTAL_GROUPS = [['Data', ['attendance', 'results', 'insights', 'import', 'importhistory']], ['Teaching', ['assessments', 'imported', 'structure']], ['Administration', ['students', 'backend', 'backup', 'account']]];
 Views.teacher = {
   tab: 'results', results: null, loadingResults: false,
   rf: { q: '', min: '', from: '', to: '', asm: '', sort: 'submittedAt', dir: -1 },
-  show(params) { if (params[0] && PORTAL_TABS.some(t => t[0] === params[0])) this.tab = params[0]; this.render(); },
+  show(params) {
+    if (params[0] === 'password') { this.tab = 'assessments'; AssessUI.sub = 'passwords'; Router.setQuiet('teacher', ['assessments']); }   // passwords live inside Assessments now
+    else if (params[0] && PORTAL_TABS.some(t => t[0] === params[0])) this.tab = params[0];
+    this.render();
+  },
   refresh() { this.render(); },
   render() {
     document.querySelectorAll('.rs-sticky').forEach(n => n.remove()); // Results' sticky context never outlives its tab
@@ -12018,14 +12022,14 @@ Views.teacher = {
         el('button', { class: 'btn btn-sm btn-primary', 'data-a': 'all', onclick: async (ev) => {
           const b = ev.currentTarget; b.disabled = true;
           for (const a of missing) { const r = await Backend.authedPost({ action: 'aePwSet', assessmentId: a.id, random: true }); if (r && r.ok) map = r.passwords || map; else { toast('✗ ' + ((r && r.error) || 'Could not save.'), 'bad'); break; } }
-          draw(); toast('✓ Every assessment has its own password now.', 'ok');
+          AssessUI.pw = map; draw(); toast('✓ Every assessment has its own password now.', 'ok');
         } }, '🎲 Give each of them a random password')));
       list.appendChild(el('table', { class: 'data-table apw-tbl' }, el('thead', null, el('tr', null, el('th', null, 'Assessment'), el('th', null, 'Status'), el('th', null, 'Password'), el('th', null, ''))), tb));
     };
     const save = async (a, o) => {
       const r = await Backend.authedPost(Object.assign({ action: 'aePwSet', assessmentId: a.id }, o));
       if (!r || !r.ok) { toast('✗ ' + ((r && r.error) || 'Could not save the password.') + ' — nothing changed.', 'bad', 6000); return; }
-      map = r.passwords || {}; draw();
+      map = r.passwords || {}; AssessUI.pw = map; draw();
       toast(o.clear ? '“' + (a.title || a.id) + '” has no password now — students cannot start it.' : '✓ Password of “' + (a.title || a.id) + '”: ' + r.password, 'ok', 6000);
     };
     const edit = async (a) => {
@@ -12036,7 +12040,7 @@ Views.teacher = {
     };
     Backend.authedPost({ action: 'aePwList' }).then(r => {
       if (!r || !r.ok) { clear(list); list.appendChild(el('div', { class: 'msg ' + (/Unknown action/i.test((r && r.error) || '') || (r && r.code === 'badaction') ? 'warn' : 'bad') }, /Unknown action/i.test((r && r.error) || '') || (r && r.code === 'badaction') ? 'Update Portal.gs on the class server (version 2.19) to give each assessment its own password.' : 'Could not read the passwords: ' + ((r && r.error) || 'error'))); return; }
-      map = r.passwords || {}; draw();
+      map = r.passwords || {}; AssessUI.pw = map; draw();
     });
   },
   async tabPassword(box) {
@@ -13029,13 +13033,23 @@ function importProvenanceText(q) {
 }
 
 /* ======================= Assessments area ======================= */
+(function () {   // styles of the password strip (Assessments)
+  if (document.getElementById('apw-css')) return;
+  const st = document.createElement('style'); st.id = 'apw-css';
+  st.textContent = '.apw-strip{display:flex;align-items:center;flex-wrap:wrap;gap:.45rem .9rem;margin:.2rem 0 .9rem;padding:.6rem .9rem;border-radius:12px;border:1px solid var(--line,#dde3ea);background:#fff}' +
+    '.apw-strip.warn{border-color:#f0b9b4;background:#fdecea}.apw-strip.ok{background:#f3faf6;border-color:#cfe9da}' +
+    '.apw-strip-t{font-weight:600}.apw-strip-w{color:#b3261e;font-weight:700}.apw-strip-a{display:flex;gap:.4rem;margin-left:auto;flex-wrap:wrap}' +
+    'td.apw-st{min-width:6.6rem}td.apw-st .badge,td.apw-cell code{white-space:nowrap;word-break:keep-all;overflow-wrap:normal}';
+  document.head.appendChild(st);
+})();
 const AssessUI = {
   sub: 'library', builder: null, dirtyBuilder: false, lf: { q: '', status: 'active' }, libSel: new Set(),
   bank: bankFilterDefaults({ elig: 'yes' }), showBank: false, qSel: new Set(),
-  assignments: null, groups: null, attemptsCache: null, migrationMsg: '',
+  assignments: null, groups: null, attemptsCache: null, migrationMsg: '', pw: null,
   async loadPrivate(force) {
     if (this.assignments && this.groups && !force) return;
-    const [a, g] = await Promise.all([AssessAPI.listAssignments(), AssessAPI.listGroups()]);
+    const [a, g, p] = await Promise.all([AssessAPI.listAssignments(), AssessAPI.listGroups(), Backend.isConfigured() ? Backend.authedPost({ action: 'aePwList' }) : Promise.resolve(null)]);
+    this.pw = p && p.ok ? (p.passwords || {}) : null;   // null: local mode or an older class server
     this.assignments = a && a.ok ? a.assignments : [];
     this.groups = g && g.ok ? g.groups : [];
     this.privateError = !(a && a.ok) ? ((a && a.error) || 'Could not load assignments.') : !(g && g.ok) ? ((g && g.error) || 'Could not load groups.') : '';
@@ -13055,12 +13069,47 @@ const AssessUI = {
     if (this.migrationMsg) box.appendChild(el('div', { class: 'msg ' + (this.migrationMsg.startsWith('✓') ? 'ok' : 'warn') }, this.migrationMsg));
     if (this.privateError) box.appendChild(el('div', { class: 'msg bad' }, this.privateError));
     this.renderDashboard(box);
-    box.appendChild(el('div', { class: 'row sub-tabs', role: 'tablist' }, [['library', '📚 Assessment Library'], ['assignments', '📤 Assignments'], ['groups', '👥 Student groups']].map(([id, l]) =>
+    this.renderPwStrip(box);
+    box.appendChild(el('div', { class: 'row sub-tabs', role: 'tablist' }, [['library', '📚 Assessment Library'], ['assignments', '📤 Assignments'], ['groups', '👥 Student groups'], ['passwords', '🔑 Passwords']].map(([id, l]) =>
       el('button', { class: 'chip' + (this.sub === id ? ' active' : ''), role: 'tab', 'aria-selected': String(this.sub === id), onclick: () => { this.sub = id; this.render(box); } }, l))));
     const inner = el('div', { class: 'mt1' }); box.appendChild(inner);
     if (this.sub === 'assignments') return this.renderAssignments(inner);
     if (this.sub === 'groups') return this.renderGroups(inner);
+    if (this.sub === 'passwords') return Backend.isConfigured() ? Views.teacher.renderAssessPw(inner) : Views.teacher.tabPassword(inner);   // local mode keeps the class password
     this.renderLibrary(inner);
+  },
+  /* ---------------- passwords (one per assessment) — part of Assessments ---------------- */
+  async setPw(a, o) {
+    const r = await Backend.authedPost(Object.assign({ action: 'aePwSet', assessmentId: a.id }, o));
+    if (!r || !r.ok) { toast('✗ ' + ((r && r.error) || 'Could not save the password.') + ' — nothing changed.', 'bad', 6000); return false; }
+    this.pw = r.passwords || {};
+    if (!o.all) toast(o.clear ? '“' + (a.title || a.id) + '” has no password now — students cannot start it.' : '✓ Password of “' + (a.title || a.id) + '”: ' + r.password, 'ok', 6000);
+    return true;
+  },
+  async editPw(a) {
+    const v = await promptDialog('🔑 ' + (a.title || a.id), 'Password for this assessment', { value: (this.pw && this.pw[a.id] && this.pw[a.id].password) || '', placeholder: 'at least 4 characters', okLabel: 'Save', hint: 'Not case-sensitive. Students need it to START this assessment; reviewing completed attempts needs no password.' });
+    if (v == null) return;
+    if (String(v).trim().length < 4) { toast('The password must have at least 4 characters.', 'warn'); return; }
+    if (await this.setPw(a, { password: String(v).trim() })) this.render(this.box);
+  },
+  /** The strip above the sub-tabs: how many have a password; published ones without one are flagged. */
+  renderPwStrip(box) {
+    if (!this.pw) return;
+    const live = (State.assessments || []).filter(a => a.status !== 'archived');
+    if (!live.length) return;
+    const set = live.filter(a => this.pw[a.id]).length;
+    const miss = live.filter(a => !this.pw[a.id] && a.status === 'published');
+    const allMissing = live.filter(a => !this.pw[a.id]);
+    box.appendChild(el('div', { class: 'apw-strip' + (miss.length ? ' warn' : ' ok') },
+      el('span', { class: 'apw-strip-t' }, '🔑 Assessment passwords: ', el('b', null, set + ' of ' + live.length + ' set')),
+      miss.length ? el('span', { class: 'apw-strip-w' }, '⚠ ' + miss.length + ' published assessment' + (miss.length === 1 ? ' has' : 's have') + ' no password — students cannot start ' + (miss.length === 1 ? 'it' : 'them')) : el('span', { class: 'small muted' }, 'Each password unlocks only its own assessment; reviews need none.'),
+      el('span', { class: 'apw-strip-a' },
+        allMissing.length ? el('button', { class: 'btn btn-sm btn-primary', 'data-a': 'pw-all', onclick: async (ev) => {
+          ev.currentTarget.disabled = true;
+          for (const a of allMissing) { if (!(await this.setPw(a, { random: true, all: true }))) break; }
+          toast('✓ Every assessment has its own password now.', 'ok'); this.render(this.box);
+        } }, '🎲 Give each a random password') : null,
+        this.sub !== 'passwords' ? el('button', { class: 'btn btn-sm', 'data-a': 'pw-manage', onclick: () => { this.sub = 'passwords'; this.render(this.box); } }, '🔑 Manage passwords') : null)));
   },
   renderDashboard(box) {
     const all = State.assessments || [];
@@ -13107,7 +13156,9 @@ const AssessUI = {
           el('div', { class: 'small muted' }, KIND_LABELS[a.kind] || 'Quiz', a.publishedVersion ? ' · v' + a.publishedVersion : '')),
         el('td', null, a.mode === 'pool' ? 'Pool: ' + a.poolCount + ' of ' + (a.questionIds || []).length : 'Fixed'),
         el('td', null, String((a.questionIds || []).length)),
-        el('td', null, statusBadge(ds)),
+        el('td', { class: 'nowrap apw-st' }, statusBadge(ds)),
+        this.pw ? el('td', { class: 'nowrap apw-cell' }, this.pw[a.id] ? el('code', { class: 'apw-pw', style: 'font-weight:700;letter-spacing:.04em' }, this.pw[a.id].password) : el('span', { class: 'small', style: 'color:var(--bad);font-weight:600' }, '⚠ none'),
+          el('button', { class: 'btn btn-xs', style: 'margin-left:.35rem', 'data-a': 'pw', title: this.pw[a.id] ? 'Change the password' : 'Set a password', 'aria-label': (this.pw[a.id] ? 'Change' : 'Set') + ' the password of ' + a.title, onclick: () => this.editPw(a) }, '🔑')) : null,
         el('td', null, nA ? String(nA) : el('span', { class: 'muted' }, '—')),
         el('td', { class: 'small' }, fmtDate(a.updatedAt)),
         el('td', { class: 'nowrap' },
@@ -13121,8 +13172,8 @@ const AssessUI = {
           el('button', { class: 'btn btn-xs btn-danger', onclick: () => this.deleteAssessment(a) }, 'Delete'))));
     });
     box.appendChild(el('div', { class: 'table-scroll' }, el('table', { class: 'data-table' },
-      el('thead', null, el('tr', null, ['', 'Assessment', 'Mode', 'Questions', 'Status', 'Assignments', 'Updated', ''].map(h => el('th', null, h)))),
-      el('tbody', null, list.length ? Array.from(tb.childNodes) : el('tr', null, el('td', { colspan: '8', class: 'center muted', style: 'padding:1.5rem' }, (State.assessments || []).length ? 'No assessments match.' : 'No assessments yet — click “+ Create assessment”.'))))));
+      el('thead', null, el('tr', null, ['', 'Assessment', 'Mode', 'Questions', 'Status'].concat(this.pw ? ['Password'] : [], ['Assignments', 'Updated', '']).map(h => el('th', null, h)))),
+      el('tbody', null, list.length ? Array.from(tb.childNodes) : el('tr', null, el('td', { colspan: this.pw ? '9' : '8', class: 'center muted', style: 'padding:1.5rem' }, (State.assessments || []).length ? 'No assessments match.' : 'No assessments yet — click “+ Create assessment”.'))))));
   },
   async createNew(fields) {
     const a = newAssessment(Object.assign({ title: 'New assessment' }, fields || {}));
