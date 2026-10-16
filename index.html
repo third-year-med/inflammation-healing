@@ -4513,7 +4513,12 @@ function renderHeaderStatus() {
   const box = document.getElementById('hdr-right'); if (!box) return;
   clear(box);
   const pend = Backend.pending().length;
-  if (Backend.isConfigured()) {
+  // a signed-in student (platform account) never needs the teacher pages: no Teacher link, no server-settings chip
+  const stuOnly = !!(window.NEO_BOOT && window.NEO_BOOT.role === 'student' && window.NEO_BOOT.student && !Auth.isTeacher());
+  if (stuOnly) {
+    if (Backend.isConfigured() && (!Backend.online || pend)) box.appendChild(el('span', { class: 'status-chip warn', title: Backend.online ? 'Saving your work to the class server' : 'Class server unreachable — your work is kept on this device and sent when you are back online' },
+      el('span', { class: 'dot' }), el('span', { class: 'lbl' }, Backend.online ? 'Syncing (' + pend + ')' : 'Offline')));
+  } else if (Backend.isConfigured()) {
     const on = Backend.online;
     box.appendChild(el('span', {
       class: 'status-chip ' + (on ? (pend ? 'warn' : 'on') : 'warn'), title: on ? 'Connected to the class server (Google Apps Script backend)' : 'Class server unreachable — working offline',
@@ -4541,7 +4546,7 @@ function renderHeaderStatus() {
     const ls = Store.get('last_sync_v1', 0);
     fs.textContent = Backend.isConfigured() ? ('☁ Class server' + (ls ? ' · last sync ' + fmtDate(ls) : '')) : '💾 Local mode — progress is saved in this browser';
   }
-  if (typeof uxTeacherLink === 'function') box.appendChild(uxTeacherLink()); // Stage 3
+  if (typeof uxTeacherLink === 'function' && !stuOnly) box.appendChild(uxTeacherLink()); // Stage 3
   if (typeof window.__ueToggleMount === 'function') window.__ueToggleMount(); // ✎ Edit mode, right after “Portal”
   if (typeof LiveNotifyUI !== 'undefined') LiveNotifyUI.mountBell(box);
   const due = QStats.dueIds().length;
