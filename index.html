@@ -6112,7 +6112,8 @@ Views.quiz = {
             subs.map(t => el('button', { class: 'btn btn-sm', 'data-attempt': t.id, title: t.review ? 'Review your answers' : 'See the result', onclick: () => this.openReview(it, t) }, '📄 Attempt ' + t.attemptNo + (typeof t.percent === 'number' ? ' · ' + t.percent + '%' : '') + (t.review ? ' — review' : ' — result')))) : null,
           why && (noPw || !(subs.length && !can)) ? el('div', { class: 'assess-why' }, why) : null),
         el('div', { class: 'assess-side' }, el('span', { class: 'badge ' + status[1] }, status[0]), btn));
-      (can ? todo : subs.length ? done : other).push([-assessWhen(it, items.indexOf(it)), row]);
+      const tq = /^Topic (\d+) quiz\b/.exec(a.title || '');   // ⚡ topic quizzes: topic 1 first … the last topic last, after the others
+      (can ? todo : subs.length ? done : other).push([tq ? 1e15 + Number(tq[1]) : -assessWhen(it, items.indexOf(it)), row]);
     });
     this.grp = this.grp || { todo: true, done: true, other: false };
     const group = (key, label, list, hint) => {
