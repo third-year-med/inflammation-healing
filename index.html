@@ -1265,9 +1265,21 @@ body.ux2 #view-revision .stat-strip{display:none}
 .ux-hero .ux-textbtn{color:#cfe9f5}
 .ux-cont{flex-direction:column;align-items:flex-start;gap:.1rem;border-radius:16px;max-width:100%;text-align:left}
 .ux-cont-sub{display:block;font-weight:500;font-size:.8rem;opacity:.92;max-width:100%;white-space:normal}
-.ux-quick{display:flex;gap:1.2rem;flex-wrap:wrap;margin:.8rem .2rem 0;font-size:.9rem}
-.ux-quick a{color:var(--ink-2);text-decoration:none;font-weight:600;display:inline-flex;align-items:center;gap:.35rem}
-.ux-quick a:hover{color:var(--teal-ink)}
+.ux-quick{margin:1rem 0 .4rem;padding:.85rem 1rem 1rem;border-radius:16px;border:1px solid #f1d27a;
+  background:linear-gradient(135deg,#fff9e0 0%,#ffefb8 100%);box-shadow:0 6px 18px rgba(180,130,10,.12)}
+.ux-quick-h{font-size:.78rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#8a5a00;margin:0 0 .6rem .15rem}
+.ux-quick-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem}
+.ux-qa{display:flex;align-items:center;gap:.75rem;padding:.75rem .85rem;border-radius:12px;background:#fffdf5;border:1px solid #f3dc95;
+  color:var(--navy);text-decoration:none;transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease}
+.ux-qa:hover,.ux-qa:focus-visible{transform:translateY(-2px);box-shadow:0 8px 18px rgba(180,130,10,.2);border-color:#e0b02c;outline:none}
+.ux-qa-ico{flex:0 0 auto;width:2.6rem;height:2.6rem;border-radius:50%;display:grid;place-items:center;font-size:1.25rem;font-weight:800;
+  background:linear-gradient(135deg,#ffd75e,#f5b301);color:#5b3b00;box-shadow:inset 0 -2px 0 rgba(0,0,0,.08)}
+.ux-qa-txt{display:flex;flex-direction:column;min-width:0;line-height:1.25}
+.ux-qa-txt b{font-size:1rem}
+.ux-qa-txt small{font-size:.8rem;color:#7a6330;margin-top:.1rem}
+.ux-qa-go{margin-left:auto;font-weight:800;color:#c08a00;transition:transform .15s ease}
+.ux-qa:hover .ux-qa-go{transform:translateX(3px)}
+@media (max-width:720px){.ux-quick-grid{grid-template-columns:1fr}}
 .ux-map{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:.3rem;position:relative}
 .ux-map:before{content:"";position:absolute;left:6%;right:6%;top:23px;height:2px;background:var(--line);z-index:0}
 .ux-map-i a{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;text-align:center;gap:.3rem;text-decoration:none;color:var(--ink-2);padding:.2rem;border-radius:10px}
@@ -16351,8 +16363,15 @@ Views.learn = {
       el('div', { class: 'pbar ux-hero-bar', role: 'progressbar', 'aria-valuenow': String(ov.pct), 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-label': 'Sections read' }, el('span', { style: { width: ov.pct + '%' } })),
       el('div', { class: 'ux-hero-actions' }, primary,
         started ? el('button', { class: 'ux-textbtn', onclick: () => UXP.gotoSection(UX_UNITS[0].topics[0]) }, 'Start again from Unit 1') : null)));
-    page.appendChild(el('nav', { class: 'ux-quick', 'aria-label': 'Other ways to learn' },
-      el('a', { href: '#/explain/overview' }, uxGlyph('≡'), 'All topics'), el('a', { href: '#/study/glossary' }, uxGlyph('Aa'), 'Glossary'), el('a', { href: '#/present' }, uxGlyph('▭'), 'Presentation mode')));
+    // Quick access: a warm, prominent panel — the three most useful ways into the module besides the path
+    const qa = (href, ico, title, hint) => el('a', { class: 'ux-qa', href }, el('span', { class: 'ux-qa-ico', 'aria-hidden': 'true' }, ico),
+      el('span', { class: 'ux-qa-txt' }, el('b', null, title), el('small', null, hint)), el('span', { class: 'ux-qa-go', 'aria-hidden': 'true' }, '→'));
+    page.appendChild(el('nav', { class: 'ux-quick', 'aria-label': 'Quick access' },
+      el('div', { class: 'ux-quick-h' }, '⭐ Quick access'),
+      el('div', { class: 'ux-quick-grid' },
+        qa('#/explain/overview', '📚', 'All topics', 'Every topic of the module at a glance'),
+        qa('#/study/glossary', 'Aa', 'Glossary', 'Key terms explained in plain words'),
+        qa('#/present', '🖥️', 'Presentation mode', 'Full-screen slides for class or revision'))));
 
     // 2 · Where you are
     const map = el('ol', { class: 'ux-map', 'aria-label': 'Your progress through the units' });
