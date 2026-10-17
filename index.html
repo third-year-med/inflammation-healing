@@ -1609,6 +1609,9 @@ body.ux2 #view-revision .stat-strip{display:none}
 .pres-stage.pe-editing .slide-img,.pres-stage.pe-editing .gal-fig,.pres-stage.pe-editing .gal-chip{cursor:pointer;outline:1px dashed rgba(107,79,187,.45);outline-offset:3px;border-radius:8px}
 .pres-stage.pe-editing .slide-img:hover,.pres-stage.pe-editing .gal-fig:hover,.pres-stage.pe-editing .gal-chip:hover{outline:2px dashed var(--violet,#6b4fbb)}
 .pres-stage .pe-selected{outline:3px solid var(--violet,#6b4fbb)!important;outline-offset:3px;box-shadow:0 0 0 7px rgba(107,79,187,.18);border-radius:8px}
+.sb-bar{display:flex;align-items:center;gap:.5rem;margin:.15rem 0 .3rem}.sb-b{min-width:2rem;font-size:.95rem}
+.sb-prev{margin-top:.35rem;padding:.45rem .6rem;border:1px dashed var(--line);border-radius:8px;font-size:.88rem;font-weight:400;background:var(--card);line-height:1.5}.sb-prev strong{font-weight:800}
+.sb-prev::before{content:'Preview';display:block;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);margin-bottom:.15rem}
 .pe-bar{position:absolute;left:50%;top:10px;transform:translateX(-50%);z-index:8;display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;max-width:calc(100% - 20px);padding:.45rem .6rem;background:#fff;border:2px solid var(--violet,#6b4fbb);border-radius:12px;box-shadow:0 6px 20px rgba(0,0,0,.18);font-size:.85rem}
 .pe-what{font-weight:700;color:var(--navy);max-width:28rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pe-hint{margin-left:.3rem}
@@ -6605,7 +6608,7 @@ Views.present = {
       slide.appendChild(el('div', { class: 'slide-deco', 'aria-hidden': 'true' }, el('div', { class: 'deco', html: BRAND_DECO_SVG }), s.type === 'section' && s.icon ? el('div', { class: 'secnum' }, s.icon) : null));
       if (kicker) slide.appendChild(kicker);
       slide.appendChild(el('h1', null, s.title || ''));
-      if (s.subtitle) slide.appendChild(el('div', { class: 'body' }, s.subtitle));
+      if (s.subtitle) slide.appendChild(el('div', { class: 'body', html: mdInline(esc(s.subtitle)) }));
       const imgs = buildSlideImages(s.images, false); if (imgs.length) slide.appendChild(el('div', { class: 'slide-imgs' }, imgs));
       if (s.byline) slide.appendChild(el('div', { class: 'slide-byline' }, s.byline));
     } else if (s.type === 'content') {
@@ -6732,6 +6735,28 @@ Views.present = {
     const byline = el('input', { type: 'text', value: s.byline || '' });
     const bullets = el('textarea', { style: 'min-height:150px' }); bullets.value = (s.bullets || []).join('\n');
     const notes = el('textarea', { style: 'min-height:80px' }); notes.value = s.notes || '';
+    // B = bold / unbold the selected words (stored as **word**); Ctrl+B does the same; a live preview shows the result
+    const boldTool = (ta, lines) => {
+      const prev = el('div', { class: 'sb-prev' });
+      const paint = () => { const v = ta.value.trim(); prev.style.display = /\*\*/.test(v) ? '' : 'none'; prev.innerHTML = (lines ? v.split('\n').filter(x => x.trim()).map(x => '• ' + mdInline(esc(x.trim()))) : [mdInline(esc(v))]).join('<br>'); };
+      const toggle = () => {
+        let a = ta.selectionStart, b = ta.selectionEnd, v = ta.value;
+        if (a === b) { while (a > 0 && /\S/.test(v[a - 1]) && v[a - 1] !== '\n') a--; while (b < v.length && /\S/.test(v[b])) b++; }   // no selection: the word at the cursor
+        while (a < b && /\s/.test(v[a])) a++; while (b > a && /\s/.test(v[b - 1])) b--;
+        if (a === b) { toast('Select the words to make bold first.', 'warn'); return; }
+        let sel = v.slice(a, b), out;
+        const lines = sel.split('\n'), wrapped = l => /^\*\*[\s\S]+\*\*$/.test(l.trim());
+        if (lines.every(l => !l.trim() || wrapped(l))) out = lines.map(l => l.trim() ? l.trim().slice(2, -2) : l).join('\n');      // **words** selected → unbold
+        else if (lines.length === 1 && v.slice(a - 2, a) === '**' && v.slice(b, b + 2) === '**') { a -= 2; b += 2; out = sel; }       // words inside ** ** → unbold
+        else out = lines.map(l => l.trim() ? '**' + l.trim().replace(/\*\*/g, '') + '**' : l).join('\n');                       // bold (each line on its own)
+        const s0 = a, s1 = a + out.length;
+        ta.value = v.slice(0, a) + out + v.slice(b); ta.focus(); ta.setSelectionRange(s0, s1); paint();
+      };
+      ta.addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) { e.preventDefault(); toggle(); } });
+      ta.addEventListener('input', paint); paint();
+      return el('div', { class: 'sb-wrap' }, el('div', { class: 'sb-bar' }, el('button', { type: 'button', class: 'btn btn-xs sb-b', 'data-a': 'bold', title: 'Bold / unbold the selected words (Ctrl+B)', onmousedown: e => e.preventDefault(), onclick: toggle }, el('b', null, 'B')),
+        el('span', { class: 'small muted' }, 'Select words → B (or Ctrl+B) to make them bold; again to remove bold')), ta, prev);
+    };
     const scaleLbl = el('b', null, Math.round(peScale(s) * 100) + '%');
     const scale = el('input', { type: 'range', min: '0.8', max: '6', step: '0.1', value: String(peScale(s)) });
     scale.addEventListener('input', () => { scaleLbl.textContent = Math.round(scale.value * 100) + '%'; });
@@ -6751,9 +6776,9 @@ Views.present = {
       return el('div', { class: 'stack' },
         el('label', { class: 'field' }, 'Kicker (small label above the title)', kicker),
         t !== 'question' ? el('label', { class: 'field' }, 'Title', title) : null,
-        (t === 'title' || t === 'section') ? el('label', { class: 'field' }, 'Subtitle', subtitle) : null,
+        (t === 'title' || t === 'section') ? el('label', { class: 'field' }, 'Subtitle', boldTool(subtitle, false)) : null,
         t === 'title' ? el('label', { class: 'field' }, 'Byline', byline) : null,
-        t === 'content' ? el('label', { class: 'field' }, 'Bullet points (one per line; **bold** allowed)', bullets) : null,
+        t === 'content' ? el('label', { class: 'field' }, 'Bullet points (one per line)', boldTool(bullets, true)) : null,
         t === 'question' ? el('div', { class: 'card-soft stack' },
           el('label', { class: 'field' }, 'Use a question from the bank', bankSel),
           el('div', { class: 'small muted' }, '…or leave “write my own” selected and fill these in:'),
