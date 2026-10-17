@@ -618,6 +618,16 @@ body.pres-fs-on{overflow:hidden}
 .qr-box canvas{display:block;image-rendering:pixelated}
 .join-panel{text-align:center}
 .join-panel.big .live-code{font-size:4rem}
+.att-live{text-align:center}
+.att-live-head{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;text-align:left;flex-wrap:wrap}
+.att-code-label{margin-top:1rem;font-size:.85rem;font-weight:800;letter-spacing:.2em;color:var(--ink-2)}
+.att-code-big{font-family:var(--mono,monospace);font-weight:800;letter-spacing:.12em;color:var(--navy);line-height:1.05;font-size:clamp(3rem,12vw,11rem);margin:.15rem 0 .35rem;white-space:nowrap}
+.att-live-actions{justify-content:center;gap:.6rem;margin-top:.8rem;flex-wrap:wrap}
+.att-fs{position:fixed;inset:0;z-index:100000;background:#0b2340;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;text-align:center;padding:2rem}
+.att-fs-label{font-size:clamp(1rem,2.4vw,2rem);font-weight:800;letter-spacing:.25em;opacity:.8}
+.att-fs-code{font-family:var(--mono,monospace);font-weight:800;letter-spacing:.1em;font-size:min(15vw,55vh);line-height:1;color:#ffd166;white-space:nowrap}
+.att-fs-sub{font-size:clamp(1rem,2vw,1.8rem);opacity:.85}
+.att-fs-x{position:absolute;top:1rem;right:1.2rem;background:none;border:0;color:#fff;font-size:2rem;cursor:pointer;opacity:.7}
 
 /* ---------- Chat composer & message primitives (shared: Live Classroom) ---------- */
 .stream-list{display:flex;flex-direction:column;gap:.6rem}
@@ -10122,34 +10132,34 @@ Views.attendance = {
   /* ---------------- Teacher: active session panel ---------------- */
   renderTeacherSession(page) {
     const S = AttT.state && AttT.state.session;
-    const link = AttT.token ? attendanceJoinUrl(AttT.token) : '';
-    const qr = el('div', { class: 'qr-box' }, el('span', { class: 'small muted' }, 'QR…'));
-    if (link && AttT.showCode) renderQRInto(qr, link);
-    const linkBox = el('input', { type: 'text', readonly: true, value: link || 'Preparing link…', 'aria-label': 'Attendance check-in link', style: 'width:100%;max-width:460px;font-size:.85rem', onfocus: (e) => e.target.select() });
-    const header = el('div', { class: 'card' },
-      S ? el('div', { class: 'small muted' }, (S.course || '') + (S.chapter ? ' — ' + S.chapter : '') + (S.academicYear ? ' · ' + S.academicYear : '')) : null,
-      el('h2', { style: 'margin:.1rem 0 .6rem' }, (S && S.sessionTitle) || 'Starting…'),
-      el('div', { class: 'row between' },
-        el('div', { class: 'join-panel', style: 'text-align:left' },
-          el('div', { class: 'small muted' }, 'Students scan the QR code, or open the attendance link:'),
-          el('div', { style: 'margin:.35rem 0' }, linkBox),
-          el('div', { class: 'small', id: 'att-count', style: 'margin-top:.4rem' }, 'Present: ' + (AttT.state ? AttT.state.records.length : 0) + ' students'),
-          location.protocol === 'file:' ? el('div', { class: 'small muted', style: 'max-width:420px;margin-top:.3rem' }, 'ℹ This page was opened from a file, so the QR code and link only work for students who have the file at the same location. Publish the platform online (e.g. GitHub Pages) for students to check in from their phones.') : null),
-        AttT.showCode ? qr : el('div', { class: 'qr-box', style: 'display:grid;place-items:center' }, el('span', { class: 'small muted' }, 'QR hidden')),
-        el('div', { class: 'stack' },
-          el('button', { class: 'btn', onclick: () => { AttT.showCode = !AttT.showCode; this.render(); } }, AttT.showCode ? '🙈 Hide QR' : '👁 Show QR'),
-          el('button', { class: 'btn', onclick: () => { navigator.clipboard && AttT.token && navigator.clipboard.writeText(attendanceJoinUrl(AttT.token)).then(() => toast('Check-in link copied.', 'ok'), () => { }); } }, '🔗 Copy check-in link'),
-          el('button', { class: 'btn btn-danger', onclick: () => this.closeSession() }, '⏹ Close attendance'))));
-    page.appendChild(header);
+    // 2026-10-17 (user's request): no QR code and no link — only the code, big enough for the projector
     const curCode = (S && S.code) || AttT.code || '';
-    page.appendChild(el('div', { class: 'card mt1 center', id: 'att-code-card' },
-      el('div', { class: 'small muted', style: 'letter-spacing:.12em;font-weight:700' }, 'ATTENDANCE CODE'),
-      el('div', { class: 'join-panel big', style: 'margin:.4rem 0' }, el('span', { class: 'live-code', id: 'att-code' }, curCode || '······')),
-      el('div', { class: 'small muted' }, 'Students open the Attendance tab and type this code. It works only for this session.'),
-      el('button', { class: 'btn mt1', onclick: () => this.regenerateCode() }, '🔄 Regenerate Code')));
+    page.appendChild(el('div', { class: 'card att-live', id: 'att-code-card' },
+      el('div', { class: 'att-live-head' },
+        el('div', null, S ? el('div', { class: 'small muted' }, (S.course || '') + (S.chapter ? ' — ' + S.chapter : '') + (S.academicYear ? ' · ' + S.academicYear : '')) : null,
+          el('h2', { style: 'margin:.1rem 0 0' }, (S && S.sessionTitle) || 'Starting…'))),
+      el('div', { class: 'att-code-big', id: 'att-code' }, curCode || '······'),
+      el('div', { class: 'row att-live-actions' },
+        el('button', { class: 'btn btn-primary', 'data-a': 'att-full', onclick: () => this.codeFullScreen() }, '⛶ Full screen'),
+        el('button', { class: 'btn', onclick: () => this.regenerateCode() }, '🔄 Regenerate Code'),
+        el('button', { class: 'btn btn-danger', onclick: () => this.closeSession() }, '⏹ Close attendance'))));
     this.listBox = el('div', { class: 'card mt1' });
     page.appendChild(this.listBox);
     this.paintTeacher();
+  },
+  /** The attendance code over the whole screen (projector): Esc, ✕ or a click closes; follows a regenerated code. */
+  codeFullScreen() {
+    const S = AttT.state && AttT.state.session;
+    const code = el('div', { class: 'att-fs-code' }, (S && S.code) || AttT.code || '······');
+    const ov = el('div', { class: 'att-fs', role: 'dialog', 'aria-label': 'Attendance code' },
+      el('button', { class: 'att-fs-x', 'aria-label': 'Close', title: 'Close (Esc)' }, '✕'),
+      code);   // the code only — a clean screen for the projector
+    const close = () => { ov.remove(); document.removeEventListener('keydown', key, true); clearInterval(t); try { if (document.fullscreenElement) document.exitFullscreen(); } catch (e) { } };
+    const key = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+    const t = setInterval(() => { const c = (AttT.state && AttT.state.session && AttT.state.session.code) || AttT.code; if (c && code.textContent !== c) code.textContent = c; if (!AttT.active()) close(); }, 1500);
+    ov.addEventListener('click', close); document.addEventListener('keydown', key, true);
+    document.body.appendChild(ov);
+    try { if (ov.requestFullscreen) ov.requestFullscreen().catch(() => { }); } catch (e) { }
   },
   paintTeacher() {
     const box = this.listBox; if (!box || !document.body.contains(box)) return;
