@@ -9882,7 +9882,9 @@ Views.attendance = {
       const v = clear(document.getElementById('view-attendance'));
       const page = el('div', { class: 'page page-wide' }); v.appendChild(page);
       this.page = page;
-      if (this.checkinToken) this.renderCheckin(page); else this.renderCodeEntry(page);
+      if (this.checkinToken) this.renderCheckin(page);
+      else if (Auth.isTeacher() && Backend.isConfigured()) this.renderTeacherShort(page);   // teacher: start / run a session right here
+      else this.renderCodeEntry(page);
       return;
     }
     if (attTeacherVisible()) Views.teacher.render(); // re-renders the portal, which calls renderTeacherInto(box)
@@ -9903,6 +9905,19 @@ Views.attendance = {
     if (this.report) page.appendChild(this.reportCard(this.report.session, this.report.records, true));
     page.appendChild(this.settingsCard());
     page.appendChild(this.historyCard());
+  },
+
+  /** The Attendance tab for a teacher: start a session, run it (QR / code / close), see the report — the short version of
+   *  Teacher Portal → Attendance (history and settings stay there). */
+  renderTeacherShort(page) {
+    const box = el('div', { class: 'page', style: 'max-width:980px;margin:0 auto' }); page.appendChild(box);
+    this.page = box;
+    if (AttT.sessionId && Backend.isAuthed() && !AttT.timer) AttT.startPolling();
+    const toPortal = el('button', { class: 'btn btn-sm', onclick: () => Router.go('teacher', ['attendance']) }, '⚙ History, reports & settings');
+    if (AttT.active()) { this.renderTeacherSession(box); box.appendChild(el('div', { class: 'row', style: 'justify-content:flex-end' }, toPortal)); return; }
+    box.appendChild(this.startCard());
+    if (this.report) box.appendChild(this.reportCard(this.report.session, this.report.records, true));
+    box.appendChild(el('div', { class: 'row', style: 'justify-content:flex-end' }, el('span', { class: 'small muted' }, 'Earlier sessions, reports and settings:'), toPortal));
   },
 
   /* ---------------- Student check-in ---------------- */
